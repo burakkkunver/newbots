@@ -1,0 +1,6 @@
+env.sh
+data/
+__pycache__/
+*.pyc
+venv/
+.venv/
