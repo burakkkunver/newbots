@@ -40,11 +40,10 @@ TRADE_ENABLED = _bool("TRADE_ENABLED", True)
 # ==========================================
 # GEMINI
 # ==========================================
-# Sırayla denenir: ilki 503/429 verirse bir sonrakine geçilir. Buradakiler erişilebilir değilse
-# bot, anahtarın erişebildiği en yeni "flash" ve "flash-lite" modellerini otomatik seçer.
-GEMINI_MODELS = [m.strip() for m in os.getenv(
-    "GEMINI_MODELS", "gemini-2.5-flash,gemini-2.5-flash-lite").split(",") if m.strip()]
-GEMINI_RETRIES_PER_MODEL = _int("GEMINI_RETRIES_PER_MODEL", 3)
+# Boş bırakılırsa bot, anahtarın erişebildiği en yeni "flash" ve "flash-lite" modellerini otomatik seçer.
+# Elle model yazılırsa önce onlar denenir. 503/429 gelirse sıradaki modele geçilir.
+GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "").split(",") if m.strip()]
+GEMINI_RETRIES_PER_MODEL = _int("GEMINI_RETRIES_PER_MODEL", 2)
 
 # ==========================================
 # HABER TAKİBİ

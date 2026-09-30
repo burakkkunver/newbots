@@ -5,7 +5,7 @@ Kurulum için: **[KURULUM.md](KURULUM.md)**
 ## Nasıl çalışır?
 1. **Haber (RSS, kotasız):** 10 kaynak (Cointelegraph, CoinDesk, Decrypt, The Block, NewsBTC…) her 60 sn'de paralel taranır.
    Sadece son **20 dk** içinde yayınlanmış ve daha önce görülmemiş haberler işlenir; en yeni haber önce. Aynı haber farklı sitelerde çıkarsa bir kez analiz edilir.
-2. **Gemini analizi:** `gemini-2.5-flash` (düşünme kapalı → hızlı ve ucuz). 503/429 gelirse 2-4-8 sn bekleyip tekrar dener, olmazsa `gemini-2.5-flash-lite`'a geçer. Başarısız haber kaybolmaz, sonraki turda tekrar denenir.
+2. **Gemini analizi:** Anahtarın erişebildiği en yeni flash modelleri otomatik seçilir (düşünme en düşükte → hızlı ve ucuz). 503/429 gelirse 2-4 sn bekleyip tekrar dener, olmazsa yedek modele geçer ve yoğun modeli 10 dk dinlendirir. Başarısız haber kaybolmaz, sonraki turda tekrar denenir.
 3. **Geç kalma filtresi:** Haber yayınlandığı dakikadaki **gerçek** Binance fiyatı ile şimdiki fiyat karşılaştırılır. Fiyat zaten %3'ten fazla yükselmişse alım yapılmaz ("tren kaçtı").
 4. **Puana göre işlem** (`puan ≥ 7` ve `karar = BUY`):
 

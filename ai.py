@@ -42,6 +42,7 @@ Sadece şu JSON'u döndür:
 {{"karar": "BUY", "puan": 8, "hedef_coin": "SOL", "sebep": "..."}}"""
 
 
+MODEL_COOLDOWN_SEC = 600
 _SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "computer", "exp", "learnlm")
 
 
@@ -57,6 +58,7 @@ class GeminiAnalyzer:
         self.last_fatal_error = None
         self.no_thinking_cfg = set()   # düşünme ayarını kabul etmeyen modeller
         self.available = []
+        self.cooldown = {}             # model -> bu zamana kadar öncelik verilmez
         self.models = self._resolve_models()
 
     def _resolve_models(self):
@@ -78,14 +80,15 @@ class GeminiAnalyzer:
         flash = [n for n in names if "flash" in n and not any(w in n for w in _SKIP_WORDS)
                  and "latest" not in n]
 
-        def pick(lite):
+        def pick(lite, count):
             cands = [n for n in flash if ("lite" in n) == lite]
             # En yeni sürüm önce; aynı sürümde kararlı (preview olmayan) önce
             cands.sort(key=lambda n: (_version(n), "preview" not in n), reverse=True)
-            return cands[0] if cands else None
+            return cands[:count]
 
-        for auto in (pick(False), pick(True)):
-            if auto and auto not in chosen:
+        # Ana model: en yeni iki flash, yedek: en yeni flash-lite
+        for auto in pick(False, 2) + pick(True, 1):
+            if auto not in chosen:
                 chosen.append(auto)
         if not chosen:
             chosen = list(config.GEMINI_MODELS)
@@ -144,8 +147,14 @@ class GeminiAnalyzer:
                                summary=item["summary"] or "-", categories=item["categories"] or "-")
         print(f"🧠 Gemini -> [{item['source']}] {item['title'][:70]}")
 
-        for mi, model in enumerate(self.models):
+        now = time.time()
+        # Yoğunluk yüzünden dinlendirilen modeller sona atılır (hepsi dinlenmedeyse yine denenir)
+        order = sorted(self.models, key=lambda m: self.cooldown.get(m, 0) > now)
+        for mi, model in enumerate(order):
+            if mi > 0:
+                print(f"🔁 Yedek modele geçiliyor: {model}")
             delay = 2
+            overloaded = False
             for attempt in range(config.GEMINI_RETRIES_PER_MODEL):
                 try:
                     self.stats["calls"] += 1
@@ -158,6 +167,7 @@ class GeminiAnalyzer:
                         continue
                     if mi > 0:
                         self.stats["fallbacks"] += 1
+                    self.cooldown.pop(model, None)
                     self.last_fatal_error = None
                     print(f"🤖 [{model}] {result['karar']} | Puan: {result['puan']:.0f}/10 | "
                           f"Coin: {result['hedef_coin']}\n📝 {result['sebep']}")
@@ -166,13 +176,17 @@ class GeminiAnalyzer:
                     self.stats["errors"] += 1
                     code = getattr(e, "code", 0) or 0
                     if code in (429, 500, 502, 503, 504):
+                        overloaded = True
                         print(f"⏳ Gemini {model} yoğun ({code}). {delay} sn sonra tekrar "
                               f"({attempt + 1}/{config.GEMINI_RETRIES_PER_MODEL})")
                         time.sleep(delay)
                         delay = min(delay * 2, 15)
                         continue
                     if code == 404:
-                        print(f"❌ Model bulunamadı: {model} ({str(e)[:150]})")
+                        # Kullanımdan kalkmış model: bir daha hiç denenmez
+                        print(f"❌ Model artık kullanılamıyor, listeden çıkarıldı: {model}")
+                        if len(self.models) > 1:
+                            self.models = [m for m in self.models if m != model]
                         break
                     if code == 400 and "think" in str(e).lower() and model not in self.no_thinking_cfg:
                         self.no_thinking_cfg.add(model)
@@ -189,6 +203,7 @@ class GeminiAnalyzer:
                     print(f"❌ Gemini bağlantı hatası: {e}")
                     time.sleep(delay)
                     delay = min(delay * 2, 15)
-            if mi + 1 < len(self.models):
-                print(f"🔁 Yedek modele geçiliyor: {self.models[mi + 1]}")
+            if overloaded:
+                self.cooldown[model] = time.time() + MODEL_COOLDOWN_SEC
+                print(f"😴 {model} {MODEL_COOLDOWN_SEC // 60} dk dinlendiriliyor, bu sürede yedek model öncelikli.")
         return None

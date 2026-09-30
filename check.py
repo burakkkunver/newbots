@@ -14,8 +14,8 @@ def gemini():
     from ai import GeminiAnalyzer
     import time
     a = GeminiAnalyzer()
-    flash = [n for n in a.available if "gemini" in n]
-    print(f"   Erişilebilir Gemini modelleri ({len(flash)}): {', '.join(flash[:25]) or 'YOK'}")
+    flash = [n for n in a.available if "flash" in n]
+    print(f"   Erişilebilir flash modelleri ({len(flash)}): {', '.join(flash) or 'YOK'}")
     r = a.analyze({"source": "test", "published": time.time(), "summary": "",
                    "title": "Coinbase lists Solana-based token BONK for spot trading", "categories": ""})
     if r is None:
