@@ -58,6 +58,7 @@ class GeminiAnalyzer:
         self.last_fatal_error = None
         self.no_thinking_cfg = set()   # düşünme ayarını kabul etmeyen modeller
         self.available = []
+        self.last_good = None
         self.cooldown = {}             # model -> bu zamana kadar öncelik verilmez
         self.models = self._resolve_models()
 
@@ -150,6 +151,10 @@ class GeminiAnalyzer:
         now = time.time()
         # Yoğunluk yüzünden dinlendirilen modeller sona atılır (hepsi dinlenmedeyse yine denenir)
         order = sorted(self.models, key=lambda m: self.cooldown.get(m, 0) > now)
+        # En son başarılı olan model her zaman önce denenir (yoğun yeni modellerde vakit kaybetmemek için)
+        if self.last_good in order:
+            order.remove(self.last_good)
+            order.insert(0, self.last_good)
         for mi, model in enumerate(order):
             if mi > 0:
                 print(f"🔁 Yedek modele geçiliyor: {model}")
@@ -168,6 +173,7 @@ class GeminiAnalyzer:
                     if mi > 0:
                         self.stats["fallbacks"] += 1
                     self.cooldown.pop(model, None)
+                    self.last_good = model
                     self.last_fatal_error = None
                     print(f"🤖 [{model}] {result['karar']} | Puan: {result['puan']:.0f}/10 | "
                           f"Coin: {result['hedef_coin']}\n📝 {result['sebep']}")
