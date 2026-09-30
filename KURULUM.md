@@ -211,6 +211,7 @@ source venv/bin/activate && pip install -r requirements.txt
 | `ModuleNotFoundError: google` | `source venv/bin/activate` yapmadın. `start.sh` bunu otomatik yapar. |
 | Gemini **503 UNAVAILABLE** | Google tarafında anlık yoğunluk; senin hesabınla ilgili değil. Bot artık 2-4-8 sn bekleyip tekrar dener, olmazsa otomatik `gemini-2.5-flash-lite` modeline geçer. Haber kaybolmaz, sonraki turda tekrar denenir. |
 | Gemini **429 RESOURCE_EXHAUSTED** | Anahtar faturalandırma açık olmayan projeden alınmış. AI Studio → API Keys → anahtarın projesinin yanında *Paid/Tier 1* yazmalı. Yazmıyorsa o projede yeni anahtar oluştur. |
+| Gemini **Model bulunamadı (404)** | Google eski modeli kaldırmış. Bot, anahtarının erişebildiği en yeni flash modellerini otomatik seçer; `check.py` erişilebilir modelleri listeler. Belirli bir model istersen: `export GEMINI_MODELS="model-adi"` |
 | Gemini **400 / 403 API key not valid** | Anahtar yanlış kopyalanmış veya silinmiş. Yeni anahtar oluştur. |
 | Binance **-2015 Invalid API-key** | Testnet yerine gerçek hesap anahtarı girilmiş (veya tersi). `TEST_MODE` ile anahtar türü uyumlu olmalı. |
 | Binance **-1021 Timestamp** | Sunucu saati kayık. `sudo timedatectl set-ntp true` |
@@ -222,6 +223,6 @@ source venv/bin/activate && pip install -r requirements.txt
 
 ## 💰 Maliyet notu
 
-Gemini 2.5 Flash, düşünme modu kapalı çalışır. Haber başına yaklaşık 0,0004 $ tutar.
+Gemini Flash, düşünme modu en düşük seviyede çalışır. Haber başına yaklaşık 0,0004 $ tutar.
 Günde ~200-300 haber analiz edilirse aylık yaklaşık **3-4 $** eder. Güncel tahmini maliyeti her 20 dakikalık Telegram özetinde görebilirsin.
 Bütçe aşılırsa `env.sh`'e `export GEMINI_MODELS="gemini-2.5-flash-lite"` ekleyerek maliyeti ~5 kat düşürebilirsin.

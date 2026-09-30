@@ -58,7 +58,7 @@ def run_bot():
     send_telegram(
         f"🚀 <b>Kripto Haber Botu Başlatıldı</b>\n\n{exch}\n"
         f"<b>Bot bütçesi:</b> {config.BUDGET_USDT:g} USDT | <b>Açık pozisyon:</b> {len(trader.positions)}\n"
-        f"<b>Model:</b> {', '.join(config.GEMINI_MODELS)}\n"
+        f"<b>Model:</b> {', '.join(ai.models)}\n"
         f"<b>Haber yaşı sınırı:</b> {config.MAX_NEWS_AGE_MIN:g} dk | <b>Tarama:</b> {config.POLL_SECONDS} sn\n"
         f"<b>Alım eşiği:</b> puan ≥ {config.BUY_MIN_SCORE:g}\n"
         f"Durum için Telegram'a /durum yazabilirsin.")

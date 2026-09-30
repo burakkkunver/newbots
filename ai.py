@@ -42,24 +42,75 @@ Sadece şu JSON'u döndür:
 {{"karar": "BUY", "puan": 8, "hedef_coin": "SOL", "sebep": "..."}}"""
 
 
+_SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "computer", "exp", "learnlm")
+
+
+def _version(name):
+    m = re.search(r"gemini-(\d+(?:\.\d+)?)", name)
+    return float(m.group(1)) if m else 0.0
+
+
 class GeminiAnalyzer:
     def __init__(self):
         self.client = genai.Client(api_key=config.GEMINI_API_KEY)
         self.stats = {"calls": 0, "errors": 0, "cost_usd": 0.0, "fallbacks": 0}
         self.last_fatal_error = None
+        self.no_thinking_cfg = set()   # düşünme ayarını kabul etmeyen modeller
+        self.available = []
+        self.models = self._resolve_models()
+
+    def _resolve_models(self):
+        """Anahtarın erişebildiği modelleri Google'dan sorar. env'deki modeller yoksa
+        en yeni 'flash' ve 'flash-lite' modellerini otomatik seçer."""
+        try:
+            names = []
+            for m in self.client.models.list():
+                actions = m.supported_actions or []
+                if actions and "generateContent" not in actions:
+                    continue
+                names.append(m.name.replace("models/", ""))
+            self.available = names
+        except Exception as e:
+            print(f"⚠️ Model listesi alınamadı ({e}), env'deki modeller kullanılacak.")
+            return list(config.GEMINI_MODELS)
+
+        chosen = [m for m in config.GEMINI_MODELS if m in names]
+        flash = [n for n in names if "flash" in n and not any(w in n for w in _SKIP_WORDS)
+                 and "latest" not in n]
+
+        def pick(lite):
+            cands = [n for n in flash if ("lite" in n) == lite]
+            # En yeni sürüm önce; aynı sürümde kararlı (preview olmayan) önce
+            cands.sort(key=lambda n: (_version(n), "preview" not in n), reverse=True)
+            return cands[0] if cands else None
+
+        for auto in (pick(False), pick(True)):
+            if auto and auto not in chosen:
+                chosen.append(auto)
+        if not chosen:
+            chosen = list(config.GEMINI_MODELS)
+        missing = [m for m in config.GEMINI_MODELS if m not in names]
+        if missing:
+            print(f"⚠️ Bu modeller erişilebilir değil: {', '.join(missing)}")
+        print(f"🤖 Kullanılacak Gemini modelleri: {', '.join(chosen)}")
+        return chosen
 
     def _config_for(self, model):
-        kwargs = dict(temperature=0.2, response_mime_type="application/json", max_output_tokens=400)
-        # 2.5 serisinde "düşünme" kapatılır: daha hızlı ve daha ucuz yanıt.
-        if "2.5-flash" in model:
-            kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        kwargs = dict(temperature=0.2, response_mime_type="application/json", max_output_tokens=600,
+                      automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
+        # Düşünme en aza indirilir: daha hızlı ve daha ucuz yanıt.
+        if model not in self.no_thinking_cfg:
+            if _version(model) < 3:
+                kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+            else:
+                kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="LOW")
         return types.GenerateContentConfig(**kwargs)
 
     def _track_cost(self, model, response):
         um = getattr(response, "usage_metadata", None)
         if not um:
             return
-        pin, pout = PRICES.get(model, (0.30, 2.50))
+        pin, pout = PRICES.get(model, (0.10, 0.40) if "lite" in model else (0.50, 3.00))
         tin = um.prompt_token_count or 0
         tout = (um.candidates_token_count or 0) + (getattr(um, "thoughts_token_count", 0) or 0)
         self.stats["cost_usd"] += tin / 1e6 * pin + tout / 1e6 * pout
@@ -93,7 +144,7 @@ class GeminiAnalyzer:
                                summary=item["summary"] or "-", categories=item["categories"] or "-")
         print(f"🧠 Gemini -> [{item['source']}] {item['title'][:70]}")
 
-        for mi, model in enumerate(config.GEMINI_MODELS):
+        for mi, model in enumerate(self.models):
             delay = 2
             for attempt in range(config.GEMINI_RETRIES_PER_MODEL):
                 try:
@@ -121,8 +172,12 @@ class GeminiAnalyzer:
                         delay = min(delay * 2, 15)
                         continue
                     if code == 404:
-                        print(f"❌ Model bulunamadı: {model}. Sonraki modele geçiliyor.")
+                        print(f"❌ Model bulunamadı: {model} ({str(e)[:150]})")
                         break
+                    if code == 400 and "think" in str(e).lower() and model not in self.no_thinking_cfg:
+                        self.no_thinking_cfg.add(model)
+                        print(f"ℹ️ {model} düşünme ayarını desteklemiyor, ayarsız tekrar deneniyor.")
+                        continue
                     # 400/401/403: anahtar veya faturalandırma sorunu -> tekrar denemek boşuna
                     self.last_fatal_error = f"{code}: {str(e)[:300]}"
                     print(f"❌ GEMINI API HATASI {self.last_fatal_error}")
@@ -134,6 +189,6 @@ class GeminiAnalyzer:
                     print(f"❌ Gemini bağlantı hatası: {e}")
                     time.sleep(delay)
                     delay = min(delay * 2, 15)
-            if mi + 1 < len(config.GEMINI_MODELS):
-                print(f"🔁 Yedek modele geçiliyor: {config.GEMINI_MODELS[mi + 1]}")
+            if mi + 1 < len(self.models):
+                print(f"🔁 Yedek modele geçiliyor: {self.models[mi + 1]}")
         return None
