@@ -164,6 +164,13 @@ GERÇEK PİYASA VERİSİ:
 
 PLAN: Alım yapılırsa hedef 1-4 saat içinde en az +%2, zarar kes -%2.
 
+ÖNEMLİ - STRATEJİYİ DOĞRU YORUMLA:
+- Bot haberleri yayınlandıktan birkaç dakika sonra yakalar. Amaç, fiyat hareketi BAŞLAMADAN veya yeni başlamışken girmek.
+- "Haber yayınlandığından beri" hareketin küçük olması (ör. -%1 ile +%1 arası) OLUMSUZ DEĞİLDİR, aksine fırsatın
+  henüz kaçmadığını gösterir. Bunu "zayıf tepki" diye red gerekçesi yapma.
+- Asıl riskler: fiyat haberden önce veya sonra zaten çok yükselmişse (son 24 saatte büyük yükseliş), haber eski/tekrar ise,
+  aktör küçükse, coin tek bir haberle hareket edemeyecek kadar büyükse, söylenti ise.
+
 1) Bu haberin fiyatı YÜKSELTMEMESİ için en güçlü 3 nedeni yaz (zaten fiyatlanmış olması, aktörün küçüklüğü, belirsizlik,
    coinin büyüklüğü veya düşük hacmi, son 24 saatteki hareket, piyasa ortamı...).
 2) Bu nedenlere rağmen alım mantıklı mı? Şüphe varsa HAYIR de. Sadece net, somut ve yeni katalizörlerde EVET de.
