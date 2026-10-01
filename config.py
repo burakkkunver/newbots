@@ -23,6 +23,10 @@ def _int(name, default):
         return int(default)
 
 
+def _list(name):
+    return [m.strip() for m in os.getenv(name, "").split(",") if m.strip()]
+
+
 # ==========================================
 # API ANAHTARLARI
 # ==========================================
@@ -37,13 +41,21 @@ TEST_MODE = _bool("TEST_MODE", True)
 # False yapılırsa bot sadece analiz + Telegram yapar, hiç emir göndermez.
 TRADE_ENABLED = _bool("TRADE_ENABLED", True)
 
+# Rapor ve CSV'lerdeki saatler bu saat dilimine göre yazılır (sunucu UTC olsa bile).
+TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Istanbul")
+
 # ==========================================
 # GEMINI
 # ==========================================
 # Boş bırakılırsa bot, anahtarın erişebildiği en yeni "flash" ve "flash-lite" modellerini otomatik seçer.
 # Elle model yazılırsa önce onlar denenir. 503/429 gelirse sıradaki modele geçilir.
-GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "").split(",") if m.strip()]
+GEMINI_MODELS = _list("GEMINI_MODELS")
 GEMINI_RETRIES_PER_MODEL = _int("GEMINI_RETRIES_PER_MODEL", 2)
+# İkinci görüş ve gece raporu için güçlü modeller. Boşsa en yeni "pro" modeller otomatik seçilir.
+REVIEW_MODELS = _list("REVIEW_MODELS")
+# Alım adayları ikinci bir modele "şeytanın avukatı" olarak sorulsun mu?
+REVIEW_ENABLED = _bool("REVIEW_ENABLED", True)
+REVIEW_MIN_CONFIDENCE = _float("REVIEW_MIN_CONFIDENCE", 60)   # ikinci görüşün güveni (0-100) en az bu olmalı
 
 # ==========================================
 # HABER TAKİBİ
@@ -56,33 +68,76 @@ LATE_MOVE_PCT = _float("LATE_MOVE_PCT", 3.0)
 NOTIFY_MIN_SCORE = _float("NOTIFY_MIN_SCORE", 5)       # Bu puanın altındaki PASS'ler Telegram'a gitmez
 
 # ==========================================
+# BTC REJİMİ (piyasa ortamı)
+# ==========================================
+# BTC'nin son 24 saat / 4 saat / 1 saatlik değişimine göre 5 kademe:
+REGIME_STRONG_BULL_24H = _float("REGIME_STRONG_BULL_24H", 4.0)   # 24s >= +%4 (ve 4s >= 0) -> Çok boğa
+REGIME_BULL_24H = _float("REGIME_BULL_24H", 1.5)                 # 24s >= +%1.5 -> Boğa
+REGIME_FLAT_24H = _float("REGIME_FLAT_24H", -2.0)                # 24s > -%2 -> Yatay / hafif düşüş
+REGIME_CRASH_24H = _float("REGIME_CRASH_24H", -5.0)              # 24s <= -%5 -> Çok düşüş
+REGIME_CRASH_1H = _float("REGIME_CRASH_1H", -2.0)                # 1s <= -%2 (ani çöküş) -> Çok düşüş
+REGIME_CHECK_MIN = _float("REGIME_CHECK_MIN", 5)                 # kaç dakikada bir hesaplansın
+
+# min_score: alım için gereken en düşük puan | alloc: tutar çarpanı
+# exit: "trailing" = izleyen stop (sabit hedef yok), "fixed" = küçük sabit kâr al
+# hold_mult: maksimum bekleme süresi çarpanı
+REGIMES = {
+    "COK_BOGA":  {"ad": "🚀 Çok boğa", "min_score": 7, "alloc": 1.3, "exit": "trailing", "hold_mult": 2.0},
+    "BOGA":      {"ad": "📈 Boğa", "min_score": 7, "alloc": 1.0, "exit": "trailing", "hold_mult": 1.0},
+    "YATAY":     {"ad": "➖ Yatay / hafif düşüş", "min_score": 8, "alloc": 0.7, "exit": "fixed", "hold_mult": 1.0},
+    "DUSUS":     {"ad": "📉 Düşüş", "min_score": 9, "alloc": 0.5, "exit": "fixed", "hold_mult": 1.0},
+    "COK_DUSUS": {"ad": "🩸 Çok düşüş", "min_score": 10, "alloc": 0.4, "exit": "fixed", "hold_mult": 1.0},
+}
+
+# ==========================================
 # İŞLEM / RİSK
 # ==========================================
-BUY_MIN_SCORE = _float("BUY_MIN_SCORE", 7)
+BUY_MIN_SCORE = _float("BUY_MIN_SCORE", 7)             # Rejim ne olursa olsun bunun altı asla alınmaz
 # Botun kullanacağı sanal bütçe. Testnet hesabında 10.000 USDT olsa bile bot sadece bu kadarını kullanır.
 BUDGET_USDT = _float("BUDGET_USDT", 100)
 MIN_TRADE_USDT = _float("MIN_TRADE_USDT", 11)          # Binance min. işlem ~5-10$, üstünde pay bırakıldı
 MAX_TRADE_USDT = _float("MAX_TRADE_USDT", 50)
 MAX_OPEN_POSITIONS = _int("MAX_OPEN_POSITIONS", 5)
-# Felaket stopu. 0 yapılırsa hiç zarar kesilmez, sadece kâr al emri girilir.
-STOP_LOSS_PCT = _float("STOP_LOSS_PCT", 6)
-# Süre dolduğunda en az bu kadar kârdaysa satar (komisyonu karşılasın diye). Zararda asla süre-satışı yapmaz.
-MIN_EXIT_PROFIT_PCT = _float("MIN_EXIT_PROFIT_PCT", 0.4)
+# Her pozisyonda borsaya girilen zarar kes. Ne olursa olsun alım fiyatının bu kadar altında satılır.
+# (Eski STOP_LOSS_PCT ayarı artık kullanılmıyor.)
+HARD_STOP_PCT = _float("HARD_STOP_PCT", 2.0)
+# Stop-limit emrinin limit fiyatı stop fiyatının bu kadar altına konur (hızlı düşüşte dolması için)
+STOP_LIMIT_GAP_PCT = _float("STOP_LIMIT_GAP_PCT", 0.8)
+# Time-stop: alımdan bu kadar dakika sonra kâr bu yüzdenin altındaysa pozisyon kapatılır (sadece 7-8 puan)
+TIME_STOP_MIN = _float("TIME_STOP_MIN", 20)
+TIME_STOP_MIN_PROFIT = _float("TIME_STOP_MIN_PROFIT", 0.5)
+# Açık pozisyonlar kaç saniyede bir kontrol edilsin (izleyen stop ve time-stop için)
+MONITOR_SECONDS = _int("MONITOR_SECONDS", 10)
+# İzleyen stop borsada en az bu kadar % yukarı taşınabilecekse güncellenir (gereksiz emir trafiği olmasın)
+TRAIL_UPDATE_MIN_PCT = _float("TRAIL_UPDATE_MIN_PCT", 0.2)
 # Aynı coinde pozisyon kapandıktan sonra tekrar girmeden önce beklenecek süre
 COIN_COOLDOWN_MIN = _float("COIN_COOLDOWN_MIN", 60)
 
-# Puana göre strateji: kâr hedefi (%), maksimum bekleme (saat), bütçeden ayrılacak pay
-TIERS = {
-    7:  {"tp": _float("TP_7", 2.0),  "hold_h": _float("HOLD_7", 3),   "alloc": 0.25},
-    8:  {"tp": _float("TP_8", 3.5),  "hold_h": _float("HOLD_8", 8),   "alloc": 0.35},
-    9:  {"tp": _float("TP_9", 6.0),  "hold_h": _float("HOLD_9", 24),  "alloc": 0.50},
-    10: {"tp": _float("TP_10", 10.0), "hold_h": _float("HOLD_10", 48), "alloc": 0.60},
+# Puana göre strateji:
+#   hold_min   : maksimum bekleme (dakika, rejim çarpanıyla çarpılır)
+#   trail_act  : izleyen stopun devreye girdiği kâr (%)
+#   trail_dist : izleyen stopun zirveden uzaklığı (%)
+#   tp_fixed   : temkinli rejimlerde (yatay/düşüş) sabit kâr al hedefi (%)
+#   alloc      : bütçeden ayrılacak pay (rejim çarpanıyla çarpılır)
+#   time_stop  : 20 dk kuralı uygulansın mı
+SCORE_RULES = {
+    7:  {"hold_min": _float("HOLD_MIN_7", 45),  "trail_act": 1.5, "trail_dist": 1.0,
+         "tp_fixed": _float("TP_FIXED_7", 1.5), "alloc": 0.25, "time_stop": True},
+    8:  {"hold_min": _float("HOLD_MIN_8", 120), "trail_act": 2.0, "trail_dist": 1.2,
+         "tp_fixed": _float("TP_FIXED_8", 2.0), "alloc": 0.35, "time_stop": True},
+    9:  {"hold_min": _float("HOLD_MIN_9", 240), "trail_act": 3.0, "trail_dist": 1.5,
+         "tp_fixed": _float("TP_FIXED_9", 3.0), "alloc": 0.50, "time_stop": False},
+    10: {"hold_min": _float("HOLD_MIN_10", 480), "trail_act": 3.0, "trail_dist": 1.5,
+         "tp_fixed": _float("TP_FIXED_10", 4.0), "alloc": 0.60, "time_stop": False},
 }
 
 # ==========================================
 # RAPORLAMA
 # ==========================================
 SUMMARY_MINUTES = _float("SUMMARY_MINUTES", 20)
+REPORT_HOUR = _int("REPORT_HOUR", 23)                  # Gece raporu saati (BOT_TIMEZONE'a göre)
+REPORT_MINUTE = _int("REPORT_MINUTE", 0)
+REPORT_AI = _bool("REPORT_AI", True)                   # Gece raporuna yapay zeka yorumu eklensin mi
 
 DATA_DIR = os.getenv("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 os.makedirs(DATA_DIR, exist_ok=True)

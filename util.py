@@ -1,0 +1,81 @@
+"""Ortak yardımcılar: saat dilimi ve CSV yazma."""
+import csv
+import os
+import time
+from datetime import datetime, timezone
+
+import config
+
+try:
+    from zoneinfo import ZoneInfo
+    TZ = ZoneInfo(config.TIMEZONE)
+except Exception:   # tzdata yoksa sunucu saatine düş
+    TZ = None
+
+
+def now_local():
+    return to_local(time.time())
+
+
+def to_local(ts):
+    return datetime.fromtimestamp(ts, TZ) if TZ else datetime.fromtimestamp(ts)
+
+
+def fmt_ts(ts, with_date=True):
+    """Unix zamanını 'YYYY-MM-DD HH:MM:SS' (yerel saat) olarak yazar."""
+    return to_local(ts).strftime("%Y-%m-%d %H:%M:%S" if with_date else "%H:%M")
+
+
+def parse_ts(text):
+    """fmt_ts ile yazılmış zamanı tekrar unix zamanına çevirir."""
+    dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    if TZ:
+        dt = dt.replace(tzinfo=TZ)
+    return dt.timestamp()
+
+
+def today_str():
+    return now_local().strftime("%Y-%m-%d")
+
+
+def day_start_ts():
+    d = now_local().replace(hour=0, minute=0, second=0, microsecond=0)
+    return d.timestamp()
+
+
+_checked_headers = set()
+
+
+def append_csv(path, header, row):
+    """CSV'ye satır ekler. Dosyanın başlığı eski sürümden kalmaysa eski dosyayı
+    yeniden adlandırıp yeni başlıkla devam eder (veri kaybolmaz)."""
+    if path not in _checked_headers:
+        if os.path.exists(path):
+            with open(path, newline="") as f:
+                first = next(csv.reader(f), None)
+            if first != header:
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                os.replace(path, path.replace(".csv", f"_eski_{stamp}.csv"))
+        _checked_headers.add(path)
+    new_file = not os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        w = csv.writer(f)
+        if new_file:
+            w.writerow(header)
+        w.writerow(row)
+
+
+def read_csv(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def pct(a, b):
+    """a'nın b'ye göre yüzde değişimi."""
+    return (a / b - 1) * 100 if b else 0.0
+
+
+def ago(ts):
+    return time.time() - ts

@@ -4,24 +4,42 @@ Kurulum için: **[KURULUM.md](KURULUM.md)**
 
 ## Nasıl çalışır?
 1. **Haber (RSS, kotasız):** 10 kaynak (Cointelegraph, CoinDesk, Decrypt, The Block, NewsBTC…) her 60 sn'de paralel taranır.
-   Sadece son **20 dk** içinde yayınlanmış ve daha önce görülmemiş haberler işlenir; en yeni haber önce. Aynı haber farklı sitelerde çıkarsa bir kez analiz edilir.
-2. **Gemini analizi:** Anahtarın erişebildiği en yeni flash modelleri otomatik seçilir (düşünme en düşükte → hızlı ve ucuz). 503/429 gelirse 2-4 sn bekleyip tekrar dener, olmazsa yedek modele geçer ve yoğun modeli 10 dk dinlendirir. Başarısız haber kaybolmaz, sonraki turda tekrar denenir.
-3. **Geç kalma filtresi:** Haber yayınlandığı dakikadaki **gerçek** Binance fiyatı ile şimdiki fiyat karşılaştırılır. Fiyat zaten %3'ten fazla yükselmişse alım yapılmaz ("tren kaçtı").
-4. **Puana göre işlem** (`puan ≥ 7` ve `karar = BUY`):
+   Sadece son **20 dk** içinde yayınlanmış, daha önce görülmemiş haberler işlenir; en yeni haber önce.
+2. **Kural filtresi (ücretsiz):** Fiyat tahmini, teknik analiz, "could soar" türü spekülasyon, özet/reklam ve
+   "fiyat zaten %X yükseldi" başlıkları Gemini'ye gönderilmeden elenir.
+3. **Gemini olgu çıkarır, puanı kod hesaplar:** Gemini puan vermez. Haberin olay türünü, kesinliğini (resmi/söylenti),
+   yeniliğini, aktörün büyüklüğünü ve ölçeğini söyler; puan sabit bir tablodan hesaplanır
+   (ör. söylenti en fazla 6, zaten bilinen haber -2, coine özel değilse en fazla 6).
+4. **BTC rejimi:** BTC'nin 24s / 4s / 1s değişimine göre 5 kademe:
 
-| Puan | Kâr al | Maks. bekleme | Bütçeden pay |
-|---|---|---|---|
-| 7 | %2 | 3 saat | %25 |
-| 8 | %3.5 | 8 saat | %35 |
-| 9 | %6 | 24 saat | %50 |
-| 10 | %10 | 48 saat | %60 |
+| Rejim | Koşul | Min. puan | Tutar | Çıkış |
+|---|---|---|---|---|
+| 🚀 Çok boğa | 24s ≥ +%4 ve 4s ≥ 0 | 7 | ×1.3 | İzleyen stop, süre ×2 |
+| 📈 Boğa | 24s +%1.5 – +%4 | 7 | ×1.0 | İzleyen stop |
+| ➖ Yatay / hafif düşüş | 24s −%2 – +%1.5 | 8 | ×0.7 | Küçük sabit kâr al |
+| 📉 Düşüş | 24s −%5 – −%2 | 9 | ×0.5 | Küçük sabit kâr al |
+| 🩸 Çok düşüş | 24s ≤ −%5 veya 1s ≤ −%2 | 10 | ×0.4 | Küçük sabit kâr al |
 
-   - Market alım → hemen **OCO** (kâr al + %6 felaket stopu). `STOP_LOSS_PCT=0` ile stop tamamen kapatılabilir.
-   - Süre dolunca **sadece kârdaysa** (≥ %0.4) satar. Zarardaysa satmaz, kâra geçmesini bekler.
-   - Bakiye minimum işlem tutarına (11 $) yetmiyorsa yeni pozisyon açılmaz. Aynı coinde ikinci pozisyon açılmaz.
-5. **Telegram:** sinyaller, açılan/kapanan işlemler, her 20 dk'da bir özet. `/durum` komutu anlık özet verir.
+5. **Ucuz kontroller → ikinci görüş:** Testnette var mı, bakiye yetiyor mu, haberden sonra fiyat %3'ten fazla kaçtı mı?
+   Geçen adaylar güçlü bir modele (pro) "bu haber fiyatı neden yükseltmez?" diye sorulur; onay gelirse alınır.
+6. **Çıkış kuralları:**
+
+| Puan | Maks. süre | İzleyen stop başlar / mesafe | Sabit kâr al (temkinli rejim) | Time-stop |
+|---|---|---|---|---|
+| 7 | 45 dk | +%1.5 / %1.0 | +%1.5 | 20 dk'da +%0.5 altıysa çık |
+| 8 | 2 saat | +%2 / %1.2 | +%2 | 20 dk'da +%0.5 altıysa çık |
+| 9 | 4 saat | +%3 / %1.5 | +%3 | yok |
+| 10 | 8 saat | +%3 / %1.5 | +%4 | yok |
+
+   - Her pozisyonda borsaya **-%2 zarar kes** emri girilir (bot kapalıyken de çalışır).
+   - İzleyen stopu bot 10 sn'de bir kontrol eder ve borsadaki stop emrini yukarı taşır.
+   - Süre dolunca pozisyon kapatılır; izleyen stop aktifse kâr korunarak devam edilir.
+7. **Kalibrasyon:** Analiz edilen her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı ölçülür (`data/calibration.csv`).
+8. **Telegram:** sinyaller, işlemler, rejim değişimleri, 20 dk'da bir özet, her gün 23:00'te detaylı rapor + yapay zeka yorumu.
+   Komutlar: `/durum`, `/rejim`, `/kalibrasyon`, `/rapor`, `/dosyalar`, `/yardim`.
 
 ## Dosyalar
-- `bot.py` ana döngü · `news.py` RSS · `ai.py` Gemini · `trader.py` işlem/pozisyon · `binance_api.py` Binance REST · `config.py` ayarlar
-- `check.py` kurulum testi · `start.sh` başlatıcı · `env.sh.example` ayar şablonu
-- `data/` → `trades.csv`, `signals.csv`, `positions.json`, `bot.log` (otomatik oluşur)
+- `bot.py` ana döngü · `news.py` RSS · `filters.py` kural filtresi · `ai.py` Gemini · `market.py` BTC rejimi
+- `trader.py` alım/çıkış/pozisyon takibi · `binance_api.py` Binance REST · `calibration.py` ölçüm · `report.py` gece raporu
+- `config.py` tüm ayarlar · `check.py` kurulum testi · `analiz.py` kalibrasyon analizi · `start.sh` başlatıcı
+- `data/` → `signals.csv`, `calibration.csv`, `trades.csv`, `positions.json`, `reports/`, `bot.log` (otomatik oluşur)

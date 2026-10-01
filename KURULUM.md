@@ -96,11 +96,12 @@ cp /root/env.sh ~/newbots/env.sh      # yolu kendi dosyanın yeriyle değiştir
 nano ~/newbots/env.sh
 ```
 - `CRYPTOCOMPARE_API_KEY` satırı artık gereksiz (silebilir veya bırakabilirsin, zararı yok).
+- Daha önce `export STOP_LOSS_PCT="6"` satırını eklediysen **sil** (artık kullanılmıyor, stop sabit %2: `HARD_STOP_PCT`).
 - İstersen şu satırları ekle:
 ```bash
 export BUDGET_USDT="100"
-export STOP_LOSS_PCT="6"
 export SUMMARY_MINUTES="20"
+export REPORT_HOUR="23"
 ```
 
 **Seçenek B – şablondan sıfırdan oluştur:**
@@ -117,8 +118,12 @@ nano'da kaydetmek: **Ctrl + O → Enter**, çıkmak: **Ctrl + X**.
 |---|---|
 | `TEST_MODE="True"` | Binance Testnet (sahte para). **Şimdilik böyle kalsın.** |
 | `BUDGET_USDT` | Botun kullanacağı sanal bütçe. Testnet cüzdanında 10.000 $ olsa da bot sadece bu kadarıyla işlem yapar. |
-| `STOP_LOSS_PCT` | Felaket stopu (%). `0` yaparsan bot hiç zararda satmaz. |
+| `HARD_STOP_PCT` | Her pozisyonda borsaya girilen zarar kes (%). Varsayılan 2. |
 | `SUMMARY_MINUTES` | Telegram'a kaç dakikada bir özet gelsin. |
+| `REPORT_HOUR` | Gece raporunun saati (Türkiye saati). Varsayılan 23. |
+| `REVIEW_ENABLED` | Alım adaylarına güçlü modelden ikinci görüş. Varsayılan açık. |
+
+Diğer tüm ayarlar (rejim eşikleri, puan kuralları, süreler) `config.py` içinde açıklamalı olarak duruyor.
 
 ---
 
@@ -134,9 +139,12 @@ python3 check.py
 Beklenen çıktı:
 ```
 ✅ Telegram: True                -> Telegram'a "Kurulum testi" mesajı gelir
-✅ Gemini: {'karar': 'BUY', ...}
-✅ Binance: TESTNET | USDT: 10000.00 | ...
-✅ RSS: 9/10 kaynak çalışıyor
+   Analiz: puan 9/10 (...)
+   İkinci görüş [gemini-...-pro...]: ONAY/RED (güven ..)
+✅ Gemini: tahmini maliyet $0.00..
+✅ Binance: TESTNET | USDT: 10000.00 | ... | stop emri türü: ... | OCO: var
+✅ BTC rejimi: 📈 Boğa (BTC 24s +2.1%, ...) -> alım için en az 7 puan, ...
+✅ RSS: 10/10 kaynak çalışıyor
 ```
 
 Bir satır ❌ verirse aşağıdaki **Sorun Giderme** bölümüne bak. 1-2 RSS kaynağının ❌ olması sorun değil.
@@ -162,15 +170,31 @@ screen -r haberbot
 ```
 
 **Botu durdurmak:** screen içindeyken `Ctrl + C`.
-> Bot durunca Binance'teki açık OCO emirleri silinmez, bekler. Bot yeniden başladığında pozisyonları `data/positions.json` dosyasından hatırlar ve takibe devam eder.
+> Bot durunca Binance'teki stop ve OCO emirleri silinmez, bekler (yani %2 zarar kes her zaman borsada durur).
+> Bot yeniden başladığında pozisyonları `data/positions.json` dosyasından hatırlar ve takibe devam eder.
+> Bot kapalıyken izleyen stop yukarı taşınamaz ve time-stop çalışamaz; bunlar bot açılınca devam eder.
 
 ---
 
 ## 9. Günlük kullanım
 
+**Telegram komutları:**
+
+| Komut | Ne yapar |
+|---|---|
+| `/durum` | Bakiye, açık pozisyonlar (stop/izleyen stop seviyesi, kalan süre), BTC rejimi |
+| `/rejim` | BTC rejimi ve şu an geçerli alım kuralları |
+| `/kalibrasyon` | Son 7 günde haberlerden sonra fiyat gerçekte ne yaptı (puan gruplarına göre) |
+| `/rapor` | Gün sonu raporunu hemen hazırlar (normalde her gün 23:00'te otomatik gelir) |
+| `/dosyalar` | Veri dosyalarını (CSV) ve son raporu Telegram'a dosya olarak gönderir |
+| `/yardim` | Komut listesi |
+
+**Sunucuda:**
+
 | İş | Komut |
 |---|---|
-| Anlık durum | Telegram'a `/durum` yaz |
+| Kalibrasyon analizi (tablo) | `cd ~/newbots && source venv/bin/activate && python3 analiz.py` |
+| Son 7 günün analizi | `python3 analiz.py 7` |
 | Log'un son 50 satırı | `tail -n 50 ~/newbots/data/bot.log` |
 | Canlı log | `tail -f ~/newbots/data/bot.log` (çıkış: Ctrl + C) |
 | Kapanan işlemler | `cat ~/newbots/data/trades.csv` |
@@ -178,6 +202,28 @@ screen -r haberbot
 | Açık pozisyonlar | `cat ~/newbots/data/positions.json` |
 
 `trades.csv` ve `signals.csv` dosyalarını WinSCP ile bilgisayarına çekip Excel'de açabilirsin.
+
+---
+
+## 9.1 Kalibrasyon: puanlar gerçekten işe yarıyor mu?
+
+Bot analiz ettiği **her** haberi ölçer: alınsın ya da alınmasın, PASS ve filtrelenenler dahil.
+Sinyal anındaki gerçek Binance fiyatını kaydeder, 4 saat sonra 1 dakikalık mumlardan şunları hesaplar:
+
+| Sütun | Anlamı |
+|---|---|
+| `r15dk`, `r1s`, `r4s` | Sinyalden 15 dk / 1 saat / 4 saat sonraki getiri (%) |
+| `max1s`, `max4s` | O süre içindeki en yüksek nokta (%). Kâr al ve izleyen stop ayarı için. |
+| `min1s`, `min4s` | O süre içindeki en düşük nokta (%). %2 stop gereğinden sık mı patlıyor, buradan görülür. |
+| `btc_r1s`, `fark_r1s` | Aynı sürede BTC'nin getirisi ve coin ile BTC arasındaki fark. Haberin piyasadan bağımsız etkisi. |
+| `yayindan_sinyale` | Haber yayınlandığı andan botun karar verdiği ana kadar fiyat ne kadar oynadı |
+
+Sonuçlar `data/calibration.csv` dosyasında. Telegram'dan `/kalibrasyon` ile özetini, sunucuda `python3 analiz.py` ile
+detaylı tabloyu (puana, olay türüne, rejime, kaynağa göre) görürsün.
+
+**1-2 hafta sonra bana göndermen gerekenler:** Telegram'a `/dosyalar` yaz. Gelen 4 dosyayı bana ilet:
+`calibration.csv`, `signals.csv`, `trades.csv` ve son rapor. Bunlarla eşikleri, kâr al ve stop
+seviyelerini tahminle değil verilerle ayarlarız.
 
 ---
 
@@ -223,6 +269,8 @@ source venv/bin/activate && pip install -r requirements.txt
 
 ## 💰 Maliyet notu
 
-Gemini Flash, düşünme modu en düşük seviyede çalışır. Haber başına yaklaşık 0,0004 $ tutar.
-Günde ~200-300 haber analiz edilirse aylık yaklaşık **3-4 $** eder. Güncel tahmini maliyeti her 20 dakikalık Telegram özetinde görebilirsin.
+- Haber analizi (flash/flash-lite, düşünme en düşükte): haber başına ~0,0002-0,0005 $. Kural filtresine takılan haberler Gemini'ye hiç gitmez.
+- İkinci görüş (pro model): sadece tüm kontrolleri geçen adaylarda, günde birkaç kez. Çağrı başına ~0,01 $.
+- Gece raporu: günde 1 çağrı, ~0,02-0,05 $.
+- Toplam: ayda yaklaşık **2-5 $**. Güncel tahmini maliyet her 20 dakikalık özette ve gece raporunda yazar.
 Bütçe aşılırsa `env.sh`'e sadece lite modeli yazarak (ör. `export GEMINI_MODELS="gemini-3.5-flash-lite"`) ekleyerek maliyeti ~5 kat düşürebilirsin.

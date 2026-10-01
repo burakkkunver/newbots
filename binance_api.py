@@ -1,6 +1,8 @@
 """Küçük ve bağımlılıksız Binance Spot REST istemcisi (testnet + gerçek)."""
 import hashlib
 import hmac
+import json
+import threading
 import time
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from urllib.parse import urlencode
@@ -44,11 +46,20 @@ class Binance:
     def __init__(self, api_key, secret, testnet=True):
         self.base = TESTNET_URL if testnet else MAINNET_URL
         self.secret = (secret or "").encode()
-        self.session = requests.Session()
-        self.session.headers["X-MBX-APIKEY"] = api_key or ""
+        self.api_key = api_key or ""
+        self._local = threading.local()   # her thread kendi bağlantısını kullanır
         self.time_offset = 0
         self.symbols = {}
         self._symbols_loaded_at = 0
+
+    @property
+    def session(self):
+        s = getattr(self._local, "session", None)
+        if s is None:
+            s = requests.Session()
+            s.headers["X-MBX-APIKEY"] = self.api_key
+            self._local.session = s
+        return s
 
     # ---------- temel istek ----------
     def _request(self, method, path, params=None, signed=False, base=None, _retry=True):
@@ -103,6 +114,7 @@ class Binance:
                 "tick": f.get("PRICE_FILTER", {}).get("tickSize", "0.00000001"),
                 "min_notional": min_notional,
                 "oco": s.get("ocoAllowed", False),
+                "order_types": s.get("orderTypes", []),
             }
         self.symbols = symbols
         self._symbols_loaded_at = time.time()
@@ -111,16 +123,45 @@ class Binance:
     def price(self, symbol):
         return float(self._request("GET", "/api/v3/ticker/price", {"symbol": symbol})["price"])
 
+    def prices(self, symbols):
+        """Birden fazla sembolün (işlem yapılan borsadaki) fiyatı tek istekte."""
+        symbols = sorted(set(symbols))
+        if not symbols:
+            return {}
+        try:
+            data = self._request("GET", "/api/v3/ticker/price",
+                                 {"symbols": json.dumps(symbols, separators=(",", ":"))})
+            return {d["symbol"]: float(d["price"]) for d in data}
+        except BinanceError:
+            out = {}
+            for sym in symbols:
+                try:
+                    out[sym] = self.price(sym)
+                except BinanceError:
+                    pass
+            return out
+
     def real_price(self, symbol):
         return float(self._request("GET", "/api/v3/ticker/price", {"symbol": symbol},
                                    base=MARKET_DATA_URL)["price"])
 
     def real_price_at(self, symbol, ts_seconds):
-        """Gerçek piyasada verilen andaki (1 dk mum açılışı) fiyat."""
-        kl = self._request("GET", "/api/v3/klines", {
-            "symbol": symbol, "interval": "1m", "startTime": int(ts_seconds * 1000), "limit": 1},
-            base=MARKET_DATA_URL)
+        """Gerçek piyasada verilen dakikanın başındaki (1 dk mum açılışı) fiyat."""
+        kl = self.real_klines(symbol, "1m", start_ts=ts_seconds, limit=1)
         return float(kl[0][1]) if kl else None
+
+    def real_klines(self, symbol, interval, start_ts=None, limit=500):
+        """Gerçek piyasa mumları: [açılış_ms, açılış, yüksek, düşük, kapanış, ...]"""
+        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        if start_ts is not None:
+            params["startTime"] = int(start_ts // 60 * 60 * 1000)   # dakika başına yuvarla
+        return self._request("GET", "/api/v3/klines", params, base=MARKET_DATA_URL)
+
+    def real_ticker24(self, symbol):
+        d = self._request("GET", "/api/v3/ticker/24hr", {"symbol": symbol}, base=MARKET_DATA_URL)
+        return {"change_pct": float(d.get("priceChangePercent", 0)),
+                "quote_volume": float(d.get("quoteVolume", 0)),
+                "price": float(d.get("lastPrice", 0))}
 
     # ---------- hesap ----------
     def balances(self):
@@ -145,6 +186,22 @@ class Binance:
         return self._request("POST", "/api/v3/order", {
             "symbol": symbol, "side": "SELL", "type": "LIMIT", "timeInForce": "GTC",
             "quantity": qty, "price": price}, signed=True)
+
+    def stop_sell(self, symbol, qty, stop_price, limit_price):
+        """Tek başına zarar kes / izleyen stop emri. Mümkünse STOP_LOSS (tetiklenince piyasa
+        emri, kesin dolar), değilse STOP_LOSS_LIMIT kullanılır."""
+        info = self.symbols.get(symbol, {})
+        if "STOP_LOSS" in info.get("order_types", []):
+            try:
+                return self._request("POST", "/api/v3/order", {
+                    "symbol": symbol, "side": "SELL", "type": "STOP_LOSS",
+                    "quantity": qty, "stopPrice": stop_price}, signed=True)
+            except BinanceError as e:
+                if "immediately" in str(e.msg).lower():
+                    raise
+        return self._request("POST", "/api/v3/order", {
+            "symbol": symbol, "side": "SELL", "type": "STOP_LOSS_LIMIT", "timeInForce": "GTC",
+            "quantity": qty, "stopPrice": stop_price, "price": limit_price}, signed=True)
 
     def oco_sell(self, symbol, qty, tp_price, sl_stop, sl_limit):
         """Kâr al (LIMIT_MAKER) + zarar kes (STOP_LOSS_LIMIT). Yeni endpoint olmazsa eskisine düşer."""
