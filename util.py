@@ -46,17 +46,23 @@ def day_start_ts():
 _checked_headers = set()
 
 
+def migrate_csv(path, header):
+    """Dosyanın başlığı eski sürümden kalmaysa dosyayı '_eski_' ekiyle kenara alır (veri kaybolmaz)."""
+    if path in _checked_headers:
+        return
+    if os.path.exists(path):
+        with open(path, newline="") as f:
+            first = next(csv.reader(f), None)
+        if first != header:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            os.replace(path, path.replace(".csv", f"_eski_{stamp}.csv"))
+            print(f"ℹ️ Eski formattaki {os.path.basename(path)} kenara alındı.")
+    _checked_headers.add(path)
+
+
 def append_csv(path, header, row):
-    """CSV'ye satır ekler. Dosyanın başlığı eski sürümden kalmaysa eski dosyayı
-    yeniden adlandırıp yeni başlıkla devam eder (veri kaybolmaz)."""
-    if path not in _checked_headers:
-        if os.path.exists(path):
-            with open(path, newline="") as f:
-                first = next(csv.reader(f), None)
-            if first != header:
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-                os.replace(path, path.replace(".csv", f"_eski_{stamp}.csv"))
-        _checked_headers.add(path)
+    """CSV'ye satır ekler (başlık eskiyse önce migrate_csv ile kenara alınır)."""
+    migrate_csv(path, header)
     new_file = not os.path.exists(path)
     with open(path, "a", newline="") as f:
         w = csv.writer(f)

@@ -16,13 +16,13 @@ import traceback
 import config
 import filters
 from ai import GeminiAnalyzer
-from calibration import CALIB_CSV, Calibrator, telegram_summary
+from calibration import CALIB_CSV, HEADER as CALIB_HEADER, Calibrator, telegram_summary
 from market import Market, rules_text
 from news import NewsFeed
 from notify import esc, poll_commands, send_document, send_long, send_telegram
 from report import REPORT_DIR, SIGNALS_CSV, SIGNALS_HEADER, Reporter
-from trader import TRADES_CSV, Trader
-from util import append_csv, fmt_ts
+from trader import TRADES_CSV, TRADES_HEADER, Trader
+from util import append_csv, fmt_ts, migrate_csv, today_str
 
 MAX_AI_FAILS_PER_NEWS = 3
 HELP = ("🤖 <b>Komutlar</b>\n"
@@ -56,6 +56,8 @@ def log_signal(item, res, regime_name, review_txt, code, desc):
 
 class Bot:
     def __init__(self):
+        for path, header in ((SIGNALS_CSV, SIGNALS_HEADER), (TRADES_CSV, TRADES_HEADER), (CALIB_CSV, CALIB_HEADER)):
+            migrate_csv(path, header)
         self.feed = NewsFeed()
         self.ai = GeminiAnalyzer()
         self.trader = Trader()
@@ -227,7 +229,15 @@ class Bot:
                 if done:
                     print(f"🎯 {done} kalibrasyon ölçümü tamamlandı.")
                 if self.reporter.due():
-                    self.reporter.run()
+                    try:
+                        self.reporter.run()
+                    except Exception as e:
+                        # Rapor hatası botu etkilemesin: o gün bir kez bildir, her dakika tekrar deneme
+                        traceback.print_exc()
+                        self.trader.state["last_report"] = today_str()
+                        self.trader._save()
+                        send_telegram(f"⚠️ Gece raporu hazırlanamadı: {esc(str(e))}\nBot normal çalışmaya devam ediyor; "
+                                      f"kayıtlar tutuluyor.")
                 if time.time() - self.last_summary >= config.SUMMARY_MINUTES * 60:
                     self.send_summary()
                     self.last_summary = time.time()

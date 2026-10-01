@@ -72,7 +72,7 @@ class Reporter:
     def build(self):
         today = today_str()
         start = day_start_ts()
-        signals = [r for r in read_csv(SIGNALS_CSV) if r.get("zaman", "").startswith(today)]
+        signals = [r for r in read_csv(SIGNALS_CSV) if r.get("zaman", "").startswith(today) and "durum_kodu" in r]
         closed = self.trader.closed_today()
         calib_today = load_rows(measured_since=start)
         calib_by_link = {r["link"]: r for r in load_rows(since_ts=start - 6 * 3600)}
@@ -169,8 +169,9 @@ class Reporter:
             c = calib_by_link.get(r.get("link"))
             outcome = (f" | sonuç: 1s {c['r1s'] or '-'}%, max1s {c['max1s'] or '-'}%, 4s {c['r4s'] or '-'}%"
                        if c else "")
-            lines.append(f"{r['zaman'][11:16]} | {r['coin']} | puan {r['puan']} | {r['olay_turu']}/{r['kesinlik']}/"
-                         f"{r['aktor']} | {r['durum_kodu']} | {r['baslik'][:90]}{outcome}")
+            g = lambda k: r.get(k) or "-"  # noqa: E731
+            lines.append(f"{g('zaman')[11:16]} | {g('coin')} | puan {g('puan')} | {g('olay_turu')}/{g('kesinlik')}/"
+                         f"{g('aktor')} | {g('durum_kodu')} | {g('baslik')[:90]}{outcome}")
         data_text = _strip(report_html) + "\n\nBUGÜNKÜ HABERLER (puan>=5, adaylar ve ölçülenler):\n" + \
             ("\n".join(lines) if lines else "(yok)")
         return report_html, data_text
