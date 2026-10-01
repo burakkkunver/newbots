@@ -70,8 +70,13 @@ class Trader:
                 os.replace(tmp, path)
 
     def _migrate(self):
-        """Eski sürümden kalan açık pozisyonları yeni yapıya çevirir."""
+        """Eski sürümden kalan açık pozisyonları ve kapanmış işlem kayıtlarını yeni yapıya çevirir."""
         changed = False
+        for c in self.state.get("closed", []):
+            if "score" not in c:
+                c.update({"score": 0, "regime": "?", "mode": "eski", "peak_pct": 0.0,
+                          "opened_at": c.get("closed_at", 0), "minutes": 0, "title": "", "event": ""})
+                changed = True
         for p in self.positions:
             if "mode" in p:
                 continue

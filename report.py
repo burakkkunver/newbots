@@ -96,11 +96,12 @@ class Reporter:
             wins = sum(1 for c in closed if c["pnl"] > 0)
             S.append(f"\n📈 <b>Bugünkü işlemler</b> ({len(closed)} işlem, {wins} kârlı, kazanma %{100 * wins / len(closed):.0f})")
             for c in closed:
-                S.append(f"• {c['symbol']} {int(c['score'])}/10 [{c.get('regime', '?')}, "
-                         f"{'izleyen' if c['mode'] == 'trailing' else 'sabit'}] {c['pct']:+.2f}% "
-                         f"(zirve +{c.get('peak_pct', 0):.1f}%) — {esc(c['reason'])}, {c.get('minutes', '?')} dk")
+                mode = {"trailing": "izleyen", "fixed": "sabit"}.get(c.get("mode"), "eski sürüm")
+                S.append(f"• {c.get('symbol', '?')} {int(c.get('score') or 0)}/10 [{c.get('regime', '?')}, {mode}] "
+                         f"{c.get('pct', 0):+.2f}% (zirve +{c.get('peak_pct') or 0:.1f}%) — "
+                         f"{esc(c.get('reason', '?'))}, {c.get('minutes', '?')} dk")
             S.append("Çıkış sebepleri: " + ", ".join(f"{esc(k.split(' (')[0])} {v}"
-                                                      for k, v in _counts([c["reason"] for c in closed])))
+                                                      for k, v in _counts([c.get("reason", "?") for c in closed])))
         else:
             S.append("\n📈 <b>Bugünkü işlemler</b>: kapanan işlem yok")
 
