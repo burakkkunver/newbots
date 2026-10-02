@@ -157,7 +157,11 @@ class Bot:
                 f"<b>İlgili haberler:</b>\n{news_txt}\n<b>Durum:</b> {esc(desc)}")
 
     def handle_listing(self, ann):
-        tickers = ann["tickers"] or ["GENEL"]
+        if not ann["tickers"]:
+            # Sembolü olmayan duyurular (ör. "tokenize hisseler teminata eklendi") işlem yapılabilir değil
+            print(f"📢 {ann['source']} duyurusu (coin yok, atlandı): {ann['title'][:80]}")
+            return
+        tickers = ann["tickers"]
         for coin in tickers[:3]:
             sym = f"{coin}USDT"
             try:
