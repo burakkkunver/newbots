@@ -132,6 +132,28 @@ SCORE_RULES = {
 }
 
 # ==========================================
+# ALTERNATİF SİNYALLER (hacim tarayıcı + borsa listeleme duyuruları)
+# ==========================================
+# Hacim tarayıcı: dakikada bir tüm USDT çiftleri taranır (tek istek). 15 dk'da fiyatı SCAN_MIN_MOVE_PCT
+# kadar yükselen VE hacmi önceki saatin SCAN_VOL_RATIO katına çıkan coinler işaretlenir.
+SCANNER_ENABLED = _bool("SCANNER_ENABLED", True)
+SCAN_SECONDS = _int("SCAN_SECONDS", 60)
+SCAN_WINDOW_MIN = _int("SCAN_WINDOW_MIN", 15)
+SCAN_MIN_MOVE_PCT = _float("SCAN_MIN_MOVE_PCT", 2.0)
+SCAN_VOL_RATIO = _float("SCAN_VOL_RATIO", 3.0)
+SCAN_MIN_VOL_USDT = _float("SCAN_MIN_VOL_USDT", 50000)     # son 15 dk en az bu kadar işlem hacmi
+SCAN_MAX_CANDIDATES = _int("SCAN_MAX_CANDIDATES", 8)       # her taramada hacmine bakılan en fazla coin
+SCAN_ALERT_COOLDOWN_MIN = _float("SCAN_ALERT_COOLDOWN_MIN", 60)
+SCAN_NEWS_LOOKBACK_H = _float("SCAN_NEWS_LOOKBACK_H", 6)   # hacim patlamasıyla eşleştirilecek haberlerin yaşı
+SCAN_NOTIFY_ALL = _bool("SCAN_NOTIFY_ALL", False)          # False: sadece haberle eşleşenler Telegram'a gider
+# Upbit / Coinbase / Binance listeleme duyuruları
+ANNOUNCEMENTS_ENABLED = _bool("ANNOUNCEMENTS_ENABLED", True)
+# False: bu sinyaller sadece Telegram'a bildirilir ve kalibrasyona kaydedilir (ilk hafta böyle kalsın).
+# True: haberle eşleşen hacim patlamaları ve listelemeler, ALT_SIGNAL_SCORE puanlı haber gibi alım sürecine girer.
+ALT_SIGNALS_TRADE = _bool("ALT_SIGNALS_TRADE", False)
+ALT_SIGNAL_SCORE = _float("ALT_SIGNAL_SCORE", 8)
+
+# ==========================================
 # RAPORLAMA
 # ==========================================
 SUMMARY_MINUTES = _float("SUMMARY_MINUTES", 20)

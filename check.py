@@ -52,6 +52,31 @@ def regime():
     return f"{m.describe(info)} -> {rules_text(info['name'])}"
 
 
+def scanner():
+    from binance_api import Binance
+    from scanner import _tradeable
+    b = Binance("", "", testnet=config.TEST_MODE)
+    prices = b.real_prices_all()
+    usable = [s for s in prices if _tradeable(s)]
+    kl = b.real_klines("UNIUSDT", "1m", limit=5)
+    return f"{len(usable)} USDT çifti tek istekle alındı, mum verisi OK ({len(kl)} mum)"
+
+
+def announcements():
+    from announcements import SOURCES, AnnouncementWatcher
+    w = AnnouncementWatcher()
+    ok = 0
+    for src in SOURCES:
+        try:
+            entries = w.fetch(src)
+            ok += 1
+            sample = entries[0]["title"][:70] if entries else "(şu an listeleme duyurusu yok)"
+            print(f"   ✅ {src['name']}: {len(entries)} kayıt | örnek: {sample}")
+        except Exception as e:
+            print(f"   ❌ {src['name']}: erişilemiyor ({e}) -> bu kaynak atlanır, bot etkilenmez")
+    return f"{ok}/{len(SOURCES)} kaynak erişilebilir"
+
+
 def rss():
     from news import FEEDS, NewsFeed
     f = NewsFeed()
@@ -67,3 +92,5 @@ if __name__ == "__main__":
     step("Binance", binance)
     step("BTC rejimi", regime)
     step("RSS", rss)
+    step("Hacim tarayıcı", scanner)
+    step("Listeleme duyuruları", announcements)

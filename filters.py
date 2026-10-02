@@ -81,6 +81,8 @@ NAME_MAP = {
     "injective": "INJ", "filecoin": "FIL", "monero": "XMR", "kaspa": "KAS", "hyperliquid": "HYPE",
     "ondo": "ONDO", "jupiter": "JUP", "worldcoin": "WLD", "celestia": "TIA", "algorand": "ALGO",
     "vechain": "VET", "floki": "FLOKI", "sui": "SUI", "sei": "SEI",
+    "the sandbox": "SAND", "decentraland": "MANA", "axie infinity": "AXS", "lido": "LDO",
+    "pendle": "PENDLE", "ethena": "ENA", "starknet": "STRK",
 }
 _NAME_RE = [(re.compile(r"\b" + re.escape(k) + r"\b", re.I), v)
             for k, v in sorted(NAME_MAP.items(), key=lambda kv: -len(kv[0]))]
@@ -99,3 +101,12 @@ def extract_coin(title, known_bases):
         if rx.search(title):
             return sym
     return "GENEL"
+
+
+def title_mentions(title, coin):
+    """Başlıkta bu coin geçiyor mu? Sembol (UNI, $UNI) veya tam adı (Uniswap) aranır."""
+    if not coin or coin == "GENEL":
+        return False
+    if re.search(r"(?<![A-Za-z0-9])\$?" + re.escape(coin) + r"(?![A-Za-z0-9])", title):
+        return True
+    return any(sym == coin and rx.search(title) for rx, sym in _NAME_RE)

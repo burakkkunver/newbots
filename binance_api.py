@@ -157,6 +157,11 @@ class Binance:
             params["startTime"] = int(start_ts // 60 * 60 * 1000)   # dakika başına yuvarla
         return self._request("GET", "/api/v3/klines", params, base=MARKET_DATA_URL)
 
+    def real_prices_all(self):
+        """Gerçek piyasadaki TÜM sembollerin fiyatı (tek istek, ağırlık 4)."""
+        return {d["symbol"]: float(d["price"])
+                for d in self._request("GET", "/api/v3/ticker/price", base=MARKET_DATA_URL)}
+
     def real_ticker24(self, symbol):
         d = self._request("GET", "/api/v3/ticker/24hr", {"symbol": symbol}, base=MARKET_DATA_URL)
         return {"change_pct": float(d.get("priceChangePercent", 0)),

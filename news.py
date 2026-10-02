@@ -54,6 +54,7 @@ class NewsFeed:
         self.cache_headers = {}  # feed -> (etag, last_modified)
         self.first_seen = {}     # yayın tarihi olmayan haberler için
         self.feed_errors = {}
+        self.recent = {}         # son 12 saatin tüm başlıkları (hacim patlamasıyla eşleştirmek için)
         self._load()
 
     # ---------- kalıcı durum ----------
@@ -138,6 +139,12 @@ class NewsFeed:
             results = list(pool.map(lambda kv: self._fetch_one(*kv), FEEDS.items()))
 
         now = time.time()
+        for _, items in results:
+            for it in items:
+                if now - it["published"] < 12 * 3600:
+                    self.recent.setdefault(it["title_key"], it)
+        self.recent = {k: v for k, v in self.recent.items() if now - v["published"] < 12 * 3600}
+
         max_age = config.MAX_NEWS_AGE_MIN * 60
         fresh, keys = [], set()
         stale_count = 0
@@ -156,3 +163,11 @@ class NewsFeed:
         print(f"\n📰 RSS: {ok}/{len(FEEDS)} kaynak OK | {len(fresh)} taze yeni haber "
               f"(>{config.MAX_NEWS_AGE_MIN:.0f} dk eski {stale_count} haber atlandı)")
         return fresh
+
+    def headlines_about(self, coin, hours):
+        """Son 'hours' saatte başlığında bu coin geçen haberler (en yeni önce)."""
+        from filters import title_mentions
+        now = time.time()
+        hits = [it for it in self.recent.values()
+                if now - it["published"] <= hours * 3600 and title_mentions(it["title"], coin)]
+        return sorted(hits, key=lambda x: -x["published"])

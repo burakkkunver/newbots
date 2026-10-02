@@ -7,9 +7,9 @@ data/trades.csv      : açılıp kapanan işlemler
 import sys
 import time
 
-from calibration import BUCKETS, f, group_stats, load_rows, score_bucket
+from calibration import BUCKETS, alt_group, f, group_stats, load_rows, score_bucket
 from trader import TRADES_CSV
-from util import parse_ts, read_csv
+from util import ALT_SOURCES, parse_ts, read_csv
 
 
 def p(v, sign=True):
@@ -20,10 +20,10 @@ def p(v, sign=True):
 
 def table(title, stats):
     print(f"\n=== {title} ===")
-    print(f"{'grup':<22}{'n':>5} {'r15dk':>7}{'r1s':>7}{'r4s':>7}{'max1s':>7}{'max4s':>7}"
+    print(f"{'grup':<31}{'n':>5} {'r15dk':>7}{'r1s':>7}{'r4s':>7}{'max1s':>7}{'max4s':>7}"
           f"{'+%2 ulaşan':>11}{'-%2 gören':>10}{'BTC farkı':>10}")
     for s in stats:
-        print(f"{str(s['grup'])[:21]:<22}{s['n']:>5} {p(s['r15']):>7}{p(s['r1']):>7}{p(s['r4']):>7}"
+        print(f"{str(s['grup'])[:30]:<31}{s['n']:>5} {p(s['r15']):>7}{p(s['r1']):>7}{p(s['r4']):>7}"
               f"{p(s['max1']):>7}{p(s['max4']):>7}{p(s['hit2'], False):>11}{p(s['stop2'], False):>10}"
               f"{p(s['fark1']):>10}")
 
@@ -31,8 +31,10 @@ def table(title, stats):
 def main():
     days = float(sys.argv[1]) if len(sys.argv) > 1 else None
     since = time.time() - days * 86400 if days else None
-    rows = load_rows(since_ts=since)
-    print(f"Kalibrasyon kaydı: {len(rows)}" + (f" (son {days:g} gün)" if days else ""))
+    all_rows = load_rows(since_ts=since)
+    rows = [r for r in all_rows if r.get("kaynak") not in ALT_SOURCES]       # haberler
+    alt = [r for r in all_rows if r.get("kaynak") in ALT_SOURCES]            # hacim tarayıcı + duyurular
+    print(f"Kalibrasyon kaydı: {len(rows)} haber + {len(alt)} alternatif sinyal" + (f" (son {days:g} gün)" if days else ""))
     print("r15dk/r1s/r4s: sinyalden 15 dk/1 saat/4 saat sonraki ortalama getiri")
     print("max1s/max4s: o süre içindeki en yüksek noktanın ortalaması | BTC farkı: coin getirisi - BTC getirisi (1 saat)")
     if rows:
@@ -57,6 +59,14 @@ def main():
         for r in bad:
             print(f"{r['sinyal_zamani'][5:16]} {r['coin']:<7} puan {r['puan']:>2} 1s {p(f(r, 'r1s'))} "
                   f"| {r['durum_kodu']:<16} | {r['baslik'][:70]}")
+
+    if alt:
+        table("HACİM TARAYICI VE LİSTELEME DUYURULARI", group_stats(alt, alt_group))
+        top = sorted([r for r in alt if f(r, "max4s") is not None], key=lambda r: -f(r, "max4s"))[:10]
+        print("\n=== EN İYİ ALTERNATİF SİNYALLER (4 saatteki zirve) ===")
+        for r in top:
+            print(f"{r['sinyal_zamani'][5:16]} {r['coin']:<7} zirve {p(f(r, 'max4s'))} 1s {p(f(r, 'r1s'))} "
+                  f"| {alt_group(r):<28} | {r['baslik'][:60]}")
 
     trades = read_csv(TRADES_CSV)
     if since:

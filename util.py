@@ -43,6 +43,13 @@ def day_start_ts():
     return d.timestamp()
 
 
+# Alternatif sinyal kaynaklarının adları (CSV'lerde "kaynak" sütunu)
+SRC_SCANNER = "Hacim tarayıcı"
+SRC_UPBIT = "Upbit"
+SRC_COINBASE = "Coinbase"
+SRC_BINANCE = "Binance duyuru"
+ALT_SOURCES = (SRC_SCANNER, SRC_UPBIT, SRC_COINBASE, SRC_BINANCE)
+
 _checked_headers = set()
 
 

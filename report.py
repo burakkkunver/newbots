@@ -5,9 +5,9 @@ import os
 import re
 
 import config
-from calibration import BUCKETS, f, format_group_lines, group_stats, load_rows, score_bucket
+from calibration import BUCKETS, alt_group, f, format_group_lines, group_stats, load_rows, score_bucket
 from notify import esc, send_long, send_telegram
-from util import day_start_ts, fmt_ts, now_local, read_csv, today_str
+from util import ALT_SOURCES, day_start_ts, fmt_ts, now_local, read_csv, today_str
 
 SIGNALS_CSV = os.path.join(config.DATA_DIR, "signals.csv")
 SIGNALS_HEADER = ["zaman", "yayin", "gecikme_dk", "kaynak", "coin", "puan", "karar", "olay_turu", "kesinlik",
@@ -21,6 +21,8 @@ CODE_NAMES = {
     "IKINCI_GORUS_YOK": "İkinci görüş alınamadı", "ENGEL_TESTNET": "Testnette yok", "ENGEL_TREN": "Tren kaçtı",
     "ENGEL_BAKIYE": "Bakiye yetersiz", "ENGEL_POZISYON": "Zaten pozisyon var", "ENGEL_BEKLEME": "Coin beklemede",
     "ENGEL_MAKS": "Maks. pozisyon dolu", "ENGEL_HATA": "Emir hatası", "KAPALI": "İşlem kapalı", "GENEL": "Coin yok",
+    "HACIM_HABERLI": "Hacim patlaması + haber", "HACIM_HABERSIZ": "Hacim patlaması (habersiz)",
+    "LISTELEME": "Listeleme duyurusu",
 }
 
 
@@ -36,8 +38,9 @@ def _strip(text):
 
 
 class Reporter:
-    def __init__(self, trader, market, ai, feed):
+    def __init__(self, trader, market, ai, feed, scanner=None, ann=None):
         self.trader, self.market, self.ai, self.feed = trader, market, ai, feed
+        self.scanner, self.ann = scanner, ann
 
     def due(self):
         now = now_local()
@@ -72,9 +75,13 @@ class Reporter:
     def build(self):
         today = today_str()
         start = day_start_ts()
-        signals = [r for r in read_csv(SIGNALS_CSV) if r.get("zaman", "").startswith(today) and "durum_kodu" in r]
+        all_rows = [r for r in read_csv(SIGNALS_CSV) if r.get("zaman", "").startswith(today) and "durum_kodu" in r]
+        signals = [r for r in all_rows if r.get("kaynak") not in ALT_SOURCES]   # haberler
+        alt_rows = [r for r in all_rows if r.get("kaynak") in ALT_SOURCES]      # hacim + duyurular
         closed = self.trader.closed_today()
-        calib_today = load_rows(measured_since=start)
+        calib_all = load_rows(measured_since=start)
+        calib_today = [r for r in calib_all if r.get("kaynak") not in ALT_SOURCES]
+        calib_alt = [r for r in calib_all if r.get("kaynak") in ALT_SOURCES]
         calib_by_link = {r["link"]: r for r in load_rows(since_ts=start - 6 * 3600)}
 
         S = []   # Telegram (HTML)
@@ -154,6 +161,21 @@ class Reporter:
                              f"{CODE_NAMES.get(r['durum_kodu'], r['durum_kodu'])} | {esc(r['baslik'][:70])}")
         else:
             S.append("Henüz tamamlanmış ölçüm yok.")
+
+        # Alternatif sinyaller
+        S.append(f"\n📡 <b>Hacim tarayıcı ve listeleme duyuruları</b> "
+                 f"({'alım AÇIK' if config.ALT_SIGNALS_TRADE else 'sadece bildirim + kayıt'})")
+        S.append("Bugünkü sinyaller: " + (", ".join(f"{CODE_NAMES.get(k, k)} {v}" for k, v in
+                                                     _counts([r.get("durum_kodu", "?") for r in alt_rows])) or "yok"))
+        if calib_alt:
+            S.append(f"Bugün ölçülen {len(calib_alt)} sinyalin sonucu:")
+            S.extend(format_group_lines(group_stats(calib_alt, alt_group)))
+        if self.scanner:
+            st = self.scanner.stats
+            S.append(f"Tarayıcı: {st['scans']} tarama, {st['candidates']} aday incelendi, {st['signals']} sinyal "
+                     f"({esc(self.scanner.status)})")
+        if self.ann:
+            S.append("Duyuru kaynakları: " + esc(", ".join(f"{k}: {v}" for k, v in self.ann.status.items())))
 
         d = self.ai.day
         bad_feeds = ", ".join(self.feed.feed_errors) or "hepsi çalışıyor"

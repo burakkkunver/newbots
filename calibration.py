@@ -13,7 +13,7 @@ import os
 import time
 
 import config
-from util import append_csv, fmt_ts, parse_ts, pct, read_csv
+from util import ALT_SOURCES, append_csv, fmt_ts, parse_ts, pct, read_csv
 
 PENDING_FILE = os.path.join(config.DATA_DIR, "calib_pending.json")
 CALIB_CSV = os.path.join(config.DATA_DIR, "calibration.csv")
@@ -164,6 +164,15 @@ def score_bucket(row):
     return "?"
 
 
+ALT_NAMES = {"hacim_haberli": "Hacim patlaması + haber", "hacim_patlamasi": "Hacim patlaması (habersiz)"}
+
+
+def alt_group(row):
+    """Alternatif sinyal grubu: hacim (haberli/habersiz) veya hangi borsanın listeleme duyurusu."""
+    ev = row.get("olay_turu", "")
+    return ALT_NAMES.get(ev) or f"Listeleme: {row.get('kaynak', '?')}"
+
+
 def _mean(vals):
     return sum(vals) / len(vals) if vals else None
 
@@ -222,8 +231,12 @@ def telegram_summary(days=7):
                 f"Bekleyen ölçüm: {pending}")
     lines = [f"🎯 <b>Kalibrasyon — son {days} gün</b> ({len(rows)} ölçüm, {pending} bekleyen)",
              "1s/4s: ortalama getiri | max1s: ilk 1 saatteki en yüksek nokta ortalaması", ""]
-    lines.append("<b>Puana göre:</b>")
-    lines += format_group_lines(group_stats(rows, score_bucket, [b[0] for b in BUCKETS]), " puan")
-    lines.append("\n<b>Karara göre:</b>")
-    lines += format_group_lines(group_stats(rows, lambda r: r.get("durum_kodu") or "?")[:6])
+    news = [r for r in rows if r.get("kaynak") not in ALT_SOURCES]
+    alt = [r for r in rows if r.get("kaynak") in ALT_SOURCES]
+    lines.append("<b>Haberler — puana göre:</b>")
+    lines += format_group_lines(group_stats(news, score_bucket, [b[0] for b in BUCKETS]), " puan")
+    lines.append("\n<b>Haberler — karara göre:</b>")
+    lines += format_group_lines(group_stats(news, lambda r: r.get("durum_kodu") or "?")[:6])
+    lines.append("\n<b>Hacim tarayıcı ve listeleme duyuruları:</b>")
+    lines += format_group_lines(group_stats(alt, alt_group)) or ["henüz ölçüm yok"]
     return "\n".join(lines)

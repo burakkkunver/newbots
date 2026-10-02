@@ -122,6 +122,8 @@ nano'da kaydetmek: **Ctrl + O → Enter**, çıkmak: **Ctrl + X**.
 | `SUMMARY_MINUTES` | Telegram'a kaç dakikada bir özet gelsin. |
 | `REPORT_HOUR` | Gece raporunun saati (Türkiye saati). Varsayılan 23. |
 | `REVIEW_ENABLED` | Alım adaylarına güçlü modelden ikinci görüş. Varsayılan açık. |
+| `SCANNER_ENABLED` / `ANNOUNCEMENTS_ENABLED` | Hacim tarayıcı / listeleme duyuruları. Varsayılan açık. |
+| `ALT_SIGNALS_TRADE` | Bu iki kaynaktan gelen sinyallerle alım. Varsayılan **kapalı** (sadece bildirim + kayıt). |
 
 Diğer tüm ayarlar (rejim eşikleri, puan kuralları, süreler) `config.py` içinde açıklamalı olarak duruyor.
 
@@ -220,6 +222,15 @@ Sinyal anındaki gerçek Binance fiyatını kaydeder, 4 saat sonra 1 dakikalık 
 
 Sonuçlar `data/calibration.csv` dosyasında. Telegram'dan `/kalibrasyon` ile özetini, sunucuda `python3 analiz.py` ile
 detaylı tabloyu (puana, olay türüne, rejime, kaynağa göre) görürsün.
+
+**Hacim tarayıcı ve listeleme duyuruları** de aynı dosyaya kaydedilir (kaynak: "Hacim tarayıcı", "Upbit",
+"Coinbase", "Binance duyuru"). Puan tablolarına karışmazlar; `/kalibrasyon` ve `analiz.py` bunları ayrı bölümde gösterir.
+İlk hafta bu sinyallerle **alım yapılmaz**, sadece Telegram'a bildirim gelir. Veri iyi çıkarsa `env.sh`'e
+`export ALT_SIGNALS_TRADE="True"` ekleyerek alımı açarız.
+
+Telegram'a gelecek yeni mesajlar:
+- `📡 HACİM PATLAMASI` — bir coin 15 dk'da +%2'den fazla yükseldi, hacmi 3 katına çıktı ve son 6 saatte onunla ilgili haber var.
+- `📢 ... LİSTELEME DUYURUSU` — Upbit/Binance yeni listeleme duyurdu veya Coinbase yeni çift ekledi.
 
 **1-2 hafta sonra bana göndermen gerekenler:** Telegram'a `/dosyalar` yaz. Gelen 4 dosyayı bana ilet:
 `calibration.csv`, `signals.csv`, `trades.csv` ve son rapor. Bunlarla eşikleri, kâr al ve stop
