@@ -201,6 +201,52 @@ Kurallar: Sadece verilere dayan, uydurma. Veri azsa açıkça söyle. Markdown k
 emoji ile yaz. En fazla 3500 karakter."""
 
 
+PULSE_PROMPT = """Sen bir kripto piyasa stratejistisin. Aşağıda son saatlerin piyasa verileri var. Görevin piyasanın nabzını
+tutmak: hangi anlatılar (AI, meme, DeFi, L2, RWA, oyun...) ısınıyor, para nereye akıyor, hangi coinlerin arkasında GERÇEK
+bir hikâye var.
+
+VERİLER:
+{data}
+
+Kurallar:
+- Sadece verilere dayan; veride olmayan haber veya olay uydurma.
+- izleme_listesi: en fazla 8 coin. Sadece hem fiyat/hacim tarafında hem de haber/trend tarafında kanıtı olan coinler.
+  Sadece yükseldiği için listeye koyma. 24 saatte zaten +%30'dan fazla yükselmişse geç kalınmış olabilir, guc düşük ver.
+- guc: 1 = zayıf, 2 = orta, 3 = güçlü (birden fazla bağımsız kanıt: haber + trend + hacim aynı yönde).
+- uzak_dur: olumsuz haber, aşırı ısınma veya manipülasyon şüphesi olan coinler.
+- coin alanına sadece Binance sembolü yaz (FET, PUMP, SUI...).
+
+Sadece JSON döndür:
+{{"ozet": "3-4 cümle Türkçe", "duygu": "olumlu", "sicak_anlatilar": ["AI", "meme"],
+"izleme_listesi": [{{"coin": "FET", "guc": 2, "neden": "kısa Türkçe"}}], "uzak_dur": [{{"coin": "XYZ", "neden": "kısa Türkçe"}}]}}"""
+
+SPIKE_PROMPT = """Sen kripto piyasasında haber ve trend avcısısın. Bir coinde ani hacim patlaması oldu. Görevin: bu hareketin
+arkasında GERÇEK bir hikâye (somut katalizör veya güçlü sektör trendi) var mı, yoksa sebepsiz/manipülatif bir sıçrama mı?
+
+ÖNEMLİ: Botun kendi verisine göre sebepsiz hacim patlamaları çoğunlukla geri döner (1 saatte ortalama -%0,6, yarısı -%2
+görüyor). Bu yüzden sadece somut kanıt varsa onay ver.
+
+COIN: {coin}
+- Son 15 dk: +{move:.1f}% | hacim önceki saatin {ratio:.1f} katı ({vol}) | son 24 saat: {ch24}
+- CoinGecko trend listesinde: {trending}
+- Piyasa Nabzı izleme listesinde: {watch}
+- Piyasa Nabzı son yorumu: {pulse}
+- BTC rejimi: {regime}
+
+SON 24 SAATTE BU COINLE İLGİLİ HABERLER (kaynak, kaç dk önce):
+{headlines}
+
+Değerlendir:
+- Haberler yeni ve somut mu (listeleme, ortaklık, ürün lansmanı, büyük alım, yakım...)? Fiyat analizi ve yorum hikâye sayılmaz.
+- Haber hareketin SEBEBİ mi, yoksa zaten olmuş yükselişi mi anlatıyor?
+- Coin sıcak bir anlatının (sektör trendinin) parçası mı?
+- Son 24 saatte zaten çok yükselmişse (+%25 üstü) geç kalınmış olabilir.
+guc: hikâyenin fiyatı önümüzdeki saatlerde yukarı taşıma gücü (1-10).
+
+Sadece JSON döndür:
+{{"hikaye_var": false, "guc": 4, "katalizor": "kısa", "risk": "kısa", "sebep": "Türkçe en fazla 2 cümle"}}"""
+
+
 def _version(name):
     m = re.search(r"gemini-(\d+(?:\.\d+)?)", name)
     return float(m.group(1)) if m else 0.0
@@ -479,7 +525,65 @@ class GeminiAnalyzer:
         print(f"🧐 [{model}] {'ONAY' if out['onay'] else 'RED'} (güven {guven:.0f}) — {out['sebep']}")
         return out
 
-    # ---------- 3) gece raporu yorumu ----------
+    # ---------- 3) piyasa nabzı ----------
+    def pulse_analysis(self, data_text):
+        """Saatlik piyasa yorumu + izleme listesi. dict veya None döner."""
+        prompt = PULSE_PROMPT.format(data=data_text)
+        text, model = self._call("review", prompt, "deep")
+        if text is None:
+            text, model = self._call("main", prompt, "fast")
+        try:
+            raw = self._json(text) if text else None
+        except (json.JSONDecodeError, ValueError):
+            raw = None
+        if not isinstance(raw, dict):
+            return None
+
+        def coins(items, with_guc):
+            out = []
+            for it in items or []:
+                if not isinstance(it, dict):
+                    continue
+                coin = clean_coin(it.get("coin"))
+                if coin in ("GENEL", "") or coin in STABLES:
+                    continue
+                entry = {"coin": coin, "neden": str(it.get("neden", "")).strip()[:160]}
+                if with_guc:
+                    try:
+                        entry["guc"] = max(1, min(3, int(float(it.get("guc", 1)))))
+                    except (TypeError, ValueError):
+                        entry["guc"] = 1
+                out.append(entry)
+            return out[:8]
+        duygu = str(raw.get("duygu", "notr")).lower()
+        return {"ozet": str(raw.get("ozet", "")).strip(), "duygu": duygu if duygu in ENUMS["yon"] else "notr",
+                "anlatilar": [str(x) for x in (raw.get("sicak_anlatilar") or [])][:6],
+                "izleme": coins(raw.get("izleme_listesi"), True), "uzak_dur": coins(raw.get("uzak_dur"), False),
+                "model": model}
+
+    # ---------- 4) hacim patlaması yorumu ----------
+    def judge_spike(self, coin, move, ratio, vol, ch24, trending, watch, pulse, regime, headlines):
+        prompt = SPIKE_PROMPT.format(coin=coin, move=move, ratio=ratio, vol=vol, ch24=ch24, trending=trending,
+                                     watch=watch, pulse=pulse, regime=regime, headlines=headlines)
+        text, model = self._call("main", prompt, "fast")
+        try:
+            raw = self._json(text) if text else None
+        except (json.JSONDecodeError, ValueError):
+            raw = None
+        if not isinstance(raw, dict):
+            return None
+        try:
+            guc = max(0.0, min(10.0, float(raw.get("guc", 0))))
+        except (TypeError, ValueError):
+            guc = 0.0
+        out = {"hikaye_var": _as_bool(raw.get("hikaye_var", False)), "guc": guc,
+               "katalizor": str(raw.get("katalizor", "")).strip()[:200], "risk": str(raw.get("risk", "")).strip()[:200],
+               "sebep": str(raw.get("sebep", "")).strip()[:300], "model": model}
+        print(f"🔎 [{model}] {coin} hacim patlaması: {'HİKÂYE VAR' if out['hikaye_var'] else 'hikâye yok'} "
+              f"(güç {guc:.0f}) — {out['sebep']}")
+        return out
+
+    # ---------- 5) gece raporu yorumu ----------
     def commentary(self, data_text):
         prompt = REPORT_PROMPT.format(data=data_text, stop=f"{config.HARD_STOP_PCT:g}",
                                       ts=f"{config.TIME_STOP_MIN:g}")

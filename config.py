@@ -38,6 +38,11 @@ BINANCE_SECRET = os.getenv("BINANCE_SECRET", "")
 
 # TEST_MODE=True -> Binance Spot Testnet (sahte para). False -> GERÇEK hesap.
 TEST_MODE = _bool("TEST_MODE", True)
+# Testnet öğrenme modu: para sahte olduğu için eşikler bilinçli olarak gevşetilir ki işlem örnekleri biriksin.
+#   - rejim puan eşikleri 1 düşük (en az 7), ikinci görüş güveni 50, hacim/listeleme sinyalleriyle alım açık
+# Gerçek hesapta (TEST_MODE=False) hiçbir zaman devreye girmez.
+TESTNET_OGRENME = _bool("TESTNET_OGRENME", True)
+LEARNING = TEST_MODE and TESTNET_OGRENME
 # False yapılırsa bot sadece analiz + Telegram yapar, hiç emir göndermez.
 TRADE_ENABLED = _bool("TRADE_ENABLED", True)
 
@@ -55,7 +60,8 @@ GEMINI_RETRIES_PER_MODEL = _int("GEMINI_RETRIES_PER_MODEL", 2)
 REVIEW_MODELS = _list("REVIEW_MODELS")
 # Alım adayları ikinci bir modele "şeytanın avukatı" olarak sorulsun mu?
 REVIEW_ENABLED = _bool("REVIEW_ENABLED", True)
-REVIEW_MIN_CONFIDENCE = _float("REVIEW_MIN_CONFIDENCE", 60)   # ikinci görüşün güveni (0-100) en az bu olmalı
+# ikinci görüşün güveni (0-100) en az bu olmalı (öğrenme modunda 50)
+REVIEW_MIN_CONFIDENCE = _float("REVIEW_MIN_CONFIDENCE", 50 if LEARNING else 60)
 
 # ==========================================
 # HABER TAKİBİ
@@ -150,8 +156,37 @@ SCAN_NOTIFY_ALL = _bool("SCAN_NOTIFY_ALL", False)          # False: sadece haber
 ANNOUNCEMENTS_ENABLED = _bool("ANNOUNCEMENTS_ENABLED", True)
 # False: bu sinyaller sadece Telegram'a bildirilir ve kalibrasyona kaydedilir (ilk hafta böyle kalsın).
 # True: haberle eşleşen hacim patlamaları ve listelemeler, ALT_SIGNAL_SCORE puanlı haber gibi alım sürecine girer.
-ALT_SIGNALS_TRADE = _bool("ALT_SIGNALS_TRADE", False)
+ALT_SIGNALS_TRADE = _bool("ALT_SIGNALS_TRADE", LEARNING)
 ALT_SIGNAL_SCORE = _float("ALT_SIGNAL_SCORE", 8)
+# Hacim patlamaları Gemini'ye "arkasında gerçek bir hikâye var mı?" diye sorulur
+SPIKE_AI_ENABLED = _bool("SPIKE_AI_ENABLED", True)
+SPIKE_AI_MIN_SCORE = _float("SPIKE_AI_MIN_SCORE", 7)        # Gemini'nin hikâye gücü puanı en az bu olmalı
+SPIKE_AI_MAX_PER_HOUR = _int("SPIKE_AI_MAX_PER_HOUR", 30)   # maliyet sınırı
+
+# ==========================================
+# PİYASA NABZI (trend radarı)
+# ==========================================
+# Her saat: CoinGecko trend coin/sektörler + Korku&Açgözlülük + Binance en çok yükselenler + hacim patlamaları
+# + haber yoğunluğu -> Gemini yorumu ve izleme listesi. İzleme listesindeki coinlerin haberlerine puan bonusu.
+PULSE_ENABLED = _bool("PULSE_ENABLED", True)
+PULSE_MINUTES = _float("PULSE_MINUTES", 60)
+PULSE_NOTIFY_HOURS = _float("PULSE_NOTIFY_HOURS", 4)       # Telegram'a kaç saatte bir özet gelsin (0 = hiç)
+PULSE_SCORE_BONUS = _float("PULSE_SCORE_BONUS", 1)         # izleme listesindeki coin haberine eklenecek puan
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")     # isteğe bağlı (ücretsiz "demo" anahtarı)
+
+# ==========================================
+# TELEGRAM HABER KANALLARI (isteğe bağlı, my.telegram.org'dan API anahtarı gerekir)
+# ==========================================
+TG_API_ID = _int("TG_API_ID", 0)
+TG_API_HASH = os.getenv("TG_API_HASH", "")
+TG_NEWS_CHANNELS = _list("TG_NEWS_CHANNELS") or [
+    "WatcherGuru",            # Watcher.Guru: en hızlı genel kripto/makro manşetler ("JUST IN")
+    "TreeNewsFeed",           # Tree News: borsa duyuruları + 2000+ X hesabından süzülmüş manşetler
+    "BWEnews",                # BWEnews: çok hızlı, Asya borsaları ve listelemeler
+    "wublockchainenglish",    # Wu Blockchain: az ama kaliteli, Asya/madencilik/zincir üstü
+    "binance_announcements",  # Binance resmi duyurular (listeleme, yeni çiftler)
+]
+TG_POLL_SECONDS = _int("TG_POLL_SECONDS", 30)
 
 # ==========================================
 # RAPORLAMA

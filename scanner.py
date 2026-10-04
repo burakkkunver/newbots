@@ -33,6 +33,7 @@ class MomentumScanner:
         self.errors = 0
         self.status = "henüz çalışmadı"
         self.stats = {"scans": 0, "candidates": 0, "signals": 0}
+        self.history = deque(maxlen=500)   # (zaman, coin, 15dk hareket) — Piyasa Nabzı için
 
     def _price_ago(self, minutes, now):
         """'minutes' dakika önceki (en yakın) fiyat anlık görüntüsü. Boşluk 3 dk'dan fazlaysa None."""
@@ -88,7 +89,13 @@ class MomentumScanner:
                 self.cooldown[sym] = now + config.SCAN_ALERT_COOLDOWN_MIN * 60
                 signals.append(sig)
         self.stats["signals"] += len(signals)
+        for s in signals:
+            self.history.append((s["ts"], s["coin"], s["move"]))
         return signals
+
+    def bases(self):
+        """Son taramadaki tüm USDT çiftlerinin coin sembolleri."""
+        return {s[:-4] for s in self.snapshots[-1][1]} if self.snapshots else set()
 
     def _check_volume(self, sym, move, price):
         try:

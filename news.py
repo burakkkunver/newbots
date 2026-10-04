@@ -164,6 +164,11 @@ class NewsFeed:
               f"(>{config.MAX_NEWS_AGE_MIN:.0f} dk eski {stale_count} haber atlandı)")
         return fresh
 
+    def add_recent(self, item):
+        """Başka kaynaktan (Telegram) gelen haberi de son başlıklar arasına ekler (hacim/nabız eşleştirmesi için)."""
+        if time.time() - item["published"] < 12 * 3600:
+            self.recent.setdefault(item["title_key"], item)
+
     def headlines_about(self, coin, hours):
         """Son 'hours' saatte başlığında bu coin geçen haberler (en yeni önce)."""
         from filters import title_mentions

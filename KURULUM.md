@@ -79,11 +79,11 @@ Kullanıcı adı sorarsa GitHub kullanıcı adını, şifre sorarsa **token'ı**
 cd ~/newbots
 python3 -m venv venv
 source venv/bin/activate
-pip install --upgrade pip
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
 
-Bu 3 kütüphaneyi kurar: `google-genai` (Gemini), `feedparser` (RSS), `requests`.
+Bu 4 kütüphaneyi kurar: `google-genai` (Gemini), `feedparser` (RSS), `requests`, `telethon` (Telegram kanalları).
 Başka hiçbir şey yüklemen gerekmez.
 
 ---
@@ -186,6 +186,7 @@ screen -r haberbot
 |---|---|
 | `/durum` | Bakiye, açık pozisyonlar (stop/izleyen stop seviyesi, kalan süre), BTC rejimi |
 | `/rejim` | BTC rejimi ve şu an geçerli alım kuralları |
+| `/nabiz` | Piyasa Nabzı: sıcak anlatılar, izleme listesi (şimdi hazırlar) |
 | `/kalibrasyon` | Son 7 günde haberlerden sonra fiyat gerçekte ne yaptı (puan gruplarına göre) |
 | `/rapor` | Gün sonu raporunu hemen hazırlar (normalde her gün 23:00'te otomatik gelir) |
 | `/dosyalar` | Veri dosyalarını (CSV) ve son raporu Telegram'a dosya olarak gönderir |
@@ -238,6 +239,90 @@ seviyelerini tahminle değil verilerle ayarlarız.
 
 ---
 
+## 9.2 Telegram haber kanalları (isteğe bağlı ama önerilir)
+
+Watcher.Guru, Tree News, BWEnews gibi Telegram kanalları haberi RSS sitelerinden genelde **dakikalar önce** verir.
+Bot bu kanalları **senin Telegram hesabınla** okur:
+- **Sadece aşağıdaki listedeki** herkese açık kanalları okur. Özel sohbetlerin, grupların ve diğer kanallar okunmaz.
+- Mesaj göndermez, kanallara katılmaz.
+
+**Okunan kanallar (varsayılan):**
+
+| Kanal | Neden |
+|---|---|
+| `@WatcherGuru` | En hızlı büyük kripto/makro manşet kanalı ("JUST IN") |
+| `@TreeNewsFeed` | Borsa duyuruları + 2000'den fazla X hesabından süzülmüş manşetler |
+| `@BWEnews` | Çok hızlı, Asya borsaları ve listelemeler |
+| `@wublockchainenglish` | Wu Blockchain: az ama kaliteli; Asya, madencilik, zincir üstü |
+| `@binance_announcements` | Binance resmi duyuruları (listeleme, yeni çiftler) |
+
+Listeyi değiştirmek için `env.sh`'e şunu ekle: `export TG_NEWS_CHANNELS="WatcherGuru,TreeNewsFeed,BWEnews"`.
+
+### Kurulum (bir kez, ~5 dakika)
+
+1. **API anahtarı al:**
+   - Bilgisayarından https://my.telegram.org adresine gir. Telefon numaranı uluslararası biçimde yaz (+905…).
+   - Telegram uygulamana gelen kodu gir (SMS değil, Telegram içinde "Telegram" hesabından gelir).
+   - **API development tools**'a tıkla. Formu doldur: App title: `newsbot`, Short name: `newsbot`, Platform: `Other`. Diğer alanlar boş kalabilir.
+   - Çıkan **App api_id** (sayı) ve **App api_hash** (uzun yazı) değerlerini kopyala.
+
+2. **env.sh'e ekle:**
+```bash
+nano ~/newbots/env.sh
+# en alta ekle:
+export TG_API_ID="12345678"
+export TG_API_HASH="0123456789abcdef0123456789abcdef"
+```
+
+3. **Botu durdur ve giriş yap** (screen içinde Ctrl + C):
+```bash
+cd ~/newbots && source env.sh && source venv/bin/activate
+pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+python3 tg_login.py
+```
+   Sorular İngilizce gelir:
+   - `Please enter your phone`: telefon numaran (+905…)
+   - `Please enter the code you received`: Telegram uygulamana gelen kod
+   - `Please enter your password`: sadece iki adımlı doğrulama (bulut şifresi) açıksa sorulur
+
+   Sonunda her kanal için `✅ @WatcherGuru: son mesaj 2 dk önce` gibi satırlar görmelisin.
+
+4. **Botu başlat:** `./start.sh`. Başlangıç mesajında "Telegram kanalları: @WatcherGuru, …" yazar.
+
+> 🔐 **Güvenlik:** Giriş bilgisi `data/tg_news.session` dosyasında durur; bu dosya hesabına erişim sağlar, kimseyle paylaşma.
+> İstediğin an iptal edebilirsin: Telegram → Ayarlar → Cihazlar → bu oturumu sonlandır.
+> İstersen ikinci bir telefon numarasıyla açtığın ayrı bir Telegram hesabını da kullanabilirsin.
+> `tg_login.py` ve `check.py`'yi bot **durdurulmuşken** çalıştır (aynı oturum dosyasını aynı anda iki program kullanamaz).
+
+---
+
+## 9.3 Piyasa Nabzı ve testnet öğrenme modu
+
+**Piyasa Nabzı** saatte bir piyasanın genel resmini toplar ve Gemini'ye yorumlatır:
+- CoinGecko trend coinleri ve sektörleri
+- Korku & Açgözlülük endeksi
+- Binance'te en çok yükselenler
+- hacim patlamaları
+- haberlerde en çok adı geçen coinler
+
+Sonuç bir **izleme listesi**:
+- Listedeki coinlerin olumlu haberlerine **+1 puan** eklenir.
+- "Uzak dur" listesindekilere **-1 puan** eklenir.
+- Hacim patlaması değerlendirmesinde de bu bilgi kullanılır.
+
+Kısa özet 4 saatte bir Telegram'a gelir. İstediğin an `/nabiz` yazabilirsin.
+
+**Hacim patlamaları** artık Gemini'ye soruluyor: "Arkasında gerçek bir hikâye var mı?" Gemini'ye o coinin son 24 saatlik haberleri (Telegram dahil), trend bilgisi ve nabız yorumu gidiyor. Sadece onaylananlar Telegram'a gelir ve alım adayı olur.
+
+**Testnet öğrenme modu** (testnette varsayılan açık): Para sahte olduğu için bot daha rahat alım yapar, böylece işlem örnekleri birikir:
+- rejim eşikleri 1 puan düşük (en az 7)
+- ikinci görüş güveni 50
+- hacim ve listeleme sinyalleriyle alım açık
+
+Kapatmak için `env.sh`'e `export TESTNET_OGRENME="False"` ekle. Gerçek hesapta (`TEST_MODE="False"`) bu mod hiçbir zaman devreye girmez.
+
+---
+
 ## 10. Kod güncellendiğinde
 
 ```bash
@@ -273,6 +358,10 @@ source venv/bin/activate && pip install -r requirements.txt
 | Binance **-2015 Invalid API-key** | Testnet yerine gerçek hesap anahtarı girilmiş (veya tersi). `TEST_MODE` ile anahtar türü uyumlu olmalı. |
 | Binance **-1021 Timestamp** | Sunucu saati kayık. `sudo timedatectl set-ntp true` |
 | `XYZUSDT testnet üzerinde işlem görmüyor` | Testnette sadece belli coinler var. Normal; bot o haberi atlar ve Telegram'a yazar. |
+| Telegram kanalları: "giriş yapılmamış" | Botu durdur, `python3 tg_login.py` çalıştır (9.2. adım 3). |
+| Telegram kanalları: "telethon kurulu değil" | `pip install --upgrade pip setuptools wheel && pip install -r requirements.txt` |
+| `database is locked` (tg_news.session) | Bot çalışırken `tg_login.py`/`check.py` çalıştırılmış. Önce botu durdur. |
+| Piyasa Nabzı: "CoinGecko hata (HTTP 429)" | CoinGecko'nun ücretsiz sınırı anlık doldu; bot bir sonraki saatte tekrar dener. İstersen coingecko.com'dan ücretsiz "Demo API key" alıp `export COINGECKO_API_KEY="..."` ekle. |
 | Telegram mesajı gelmiyor | Bota Telegram'dan önce bir kez `/start` yazmış olmalısın; chat id doğru mu kontrol et. |
 | `Permission denied: ./start.sh` | `chmod +x start.sh` |
 
@@ -283,5 +372,7 @@ source venv/bin/activate && pip install -r requirements.txt
 - Haber analizi (flash/flash-lite, düşünme en düşükte): haber başına ~0,0002-0,0005 $. Kural filtresine takılan haberler Gemini'ye hiç gitmez.
 - İkinci görüş (pro model): sadece tüm kontrolleri geçen adaylarda, günde birkaç kez. Çağrı başına ~0,01 $.
 - Gece raporu: günde 1 çağrı, ~0,02-0,05 $.
+- Piyasa Nabzı: saatte 1 çağrı, günde ~0,02-0,05 $. Hacim patlaması yorumu: saatte en fazla 30 ucuz çağrı, günde ~0,02 $.
+- Telegram kanalları Gemini'ye günde birkaç yüz haber daha gönderir: ucuz modelle günde ~0,05-0,10 $.
 - Toplam: ayda yaklaşık **2-5 $**. Güncel tahmini maliyet her 20 dakikalık özette ve gece raporunda yazar.
 Bütçe aşılırsa `env.sh`'e sadece lite modeli yazarak (ör. `export GEMINI_MODELS="gemini-3.5-flash-lite"`) ekleyerek maliyeti ~5 kat düşürebilirsin.

@@ -28,8 +28,15 @@ def classify(ch1, ch4, ch24):
     return "DUSUS"
 
 
+def effective_min_score(name):
+    """Rejimin alım eşiği. Testnet öğrenme modunda 1 puan düşük (ama BUY_MIN_SCORE'un altına inmez)."""
+    base = config.REGIMES[name]["min_score"]
+    v = max(config.BUY_MIN_SCORE, base - 1) if config.LEARNING else base
+    return int(v) if float(v).is_integer() else v
+
+
 def rules_text(name):
-    r = config.REGIMES[name]
+    r = dict(config.REGIMES[name], min_score=effective_min_score(name))
     exit_txt = "izleyen stop" if r["exit"] == "trailing" else "küçük sabit kâr al"
     return (f"alım için en az {r['min_score']} puan, tutar ×{r['alloc']:g}, çıkış: {exit_txt}"
             + (f", süre ×{r['hold_mult']:g}" if r["hold_mult"] != 1 else ""))
@@ -71,6 +78,7 @@ class Market:
         name = self.current or "YATAY"
         d = dict(config.REGIMES[name])
         d["name"] = name
+        d["min_score"] = effective_min_score(name)
         d.update({k: self.metrics.get(k, 0.0) for k in ("ch1", "ch4", "ch24", "price")})
         d["known"] = self.current is not None
         return d

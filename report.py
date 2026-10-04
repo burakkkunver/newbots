@@ -22,7 +22,8 @@ CODE_NAMES = {
     "ENGEL_BAKIYE": "Bakiye yetersiz", "ENGEL_POZISYON": "Zaten pozisyon var", "ENGEL_BEKLEME": "Coin beklemede",
     "ENGEL_MAKS": "Maks. pozisyon dolu", "ENGEL_HATA": "Emir hatası", "KAPALI": "İşlem kapalı", "GENEL": "Coin yok",
     "HACIM_HABERLI": "Hacim patlaması + haber", "HACIM_HABERSIZ": "Hacim patlaması (habersiz)",
-    "LISTELEME": "Listeleme duyurusu",
+    "LISTELEME": "Listeleme duyurusu", "HACIM_AI_ONAY": "Hacim + Gemini onayı",
+    "HACIM_AI_RED": "Hacim, Gemini reddetti", "HACIM_AI_YOK": "Hacim, Gemini yanıt vermedi",
 }
 
 
@@ -38,9 +39,9 @@ def _strip(text):
 
 
 class Reporter:
-    def __init__(self, trader, market, ai, feed, scanner=None, ann=None):
+    def __init__(self, trader, market, ai, feed, scanner=None, ann=None, pulse=None, tg=None):
         self.trader, self.market, self.ai, self.feed = trader, market, ai, feed
-        self.scanner, self.ann = scanner, ann
+        self.scanner, self.ann, self.pulse, self.tg = scanner, ann, pulse, tg
 
     def due(self):
         now = now_local()
@@ -119,6 +120,16 @@ class Reporter:
             S.append("Gün içi rejim: " + " → ".join(
                 f"{fmt_ts(e['ts'], with_date=False)} {config.REGIMES[e['regime']]['ad']}" for e in changes))
 
+        # Piyasa Nabzı
+        if self.pulse and self.pulse.state.get("ozet"):
+            ps = self.pulse.state
+            S.append(f"\n🧭 <b>Piyasa Nabzı</b> (son: {fmt_ts(ps['ts'], with_date=False)}, duygu: {esc(ps.get('duygu'))})")
+            S.append(esc(ps["ozet"]))
+            S.append("Sıcak anlatılar: " + esc(", ".join(ps.get("anlatilar", [])) or "-"))
+            wc = self.pulse.today_watch_counts(start)
+            if wc:
+                S.append("Bugün izleme listesine en çok girenler: " + esc(", ".join(f"{c} ({n})" for c, n in wc)))
+
         # Haber hunisi
         codes = [r.get("durum_kodu", "?") for r in signals]
         analyzed = [r for r in signals if r.get("durum_kodu") != "FILTRE"]
@@ -176,6 +187,8 @@ class Reporter:
                      f"({esc(self.scanner.status)})")
         if self.ann:
             S.append("Duyuru kaynakları: " + esc(", ".join(f"{k}: {v}" for k, v in self.ann.status.items())))
+        if self.tg:
+            S.append("Telegram kanalları: " + esc(self.tg.status_text()))
 
         d = self.ai.day
         bad_feeds = ", ".join(self.feed.feed_errors) or "hepsi çalışıyor"

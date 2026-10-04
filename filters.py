@@ -113,3 +113,17 @@ def title_mentions(title, coin):
     if re.search(r"(?<![A-Za-z0-9])" + prefix + re.escape(coin) + r"(?![A-Za-z0-9])", title):
         return True
     return any(sym == coin and rx.search(title) for rx, sym in _NAME_RE)
+
+
+def coins_in_title(title, known_bases):
+    """Başlıkta geçen tüm coin sembolleri (haber yoğunluğu ölçümü için)."""
+    found = set()
+    for tok in re.findall(r"\$?\b[A-Z0-9]{2,10}\b", title):
+        dollar = tok.startswith("$")
+        tok = tok.lstrip("$")
+        if tok in known_bases and (dollar or (len(tok) > 2 and tok not in _STOP_TICKERS)):
+            found.add(tok)
+    for rx, sym in _NAME_RE:
+        if rx.search(title):
+            found.add(sym)
+    return found

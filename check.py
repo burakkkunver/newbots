@@ -77,6 +77,59 @@ def announcements():
     return f"{ok}/{len(SOURCES)} kaynak erişilebilir"
 
 
+def telegram_channels():
+    if not config.TG_API_ID or not config.TG_API_HASH:
+        return "yapılandırılmadı (isteğe bağlı) -> KURULUM.md 'Telegram haber kanalları' bölümü"
+    try:
+        from telethon.sync import TelegramClient
+    except ImportError:
+        raise RuntimeError("telethon kurulu değil: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt")
+    from tgnews import SESSION_PATH
+    client = TelegramClient(SESSION_PATH, config.TG_API_ID, config.TG_API_HASH)
+    client.connect()
+    try:
+        if not client.is_user_authorized():
+            raise RuntimeError("giriş yapılmamış -> bir kez 'python3 tg_login.py' çalıştır")
+        ok = 0
+        for name in config.TG_NEWS_CHANNELS:
+            try:
+                msgs = client.get_messages(client.get_entity(name), limit=1)
+                age = int((time.time() - msgs[0].date.timestamp()) / 60) if msgs else -1
+                print(f"   ✅ @{name}: son mesaj {age} dk önce | {(msgs[0].raw_text or '')[:60].replace(chr(10), ' ') if msgs else ''}")
+                ok += 1
+            except Exception as e:
+                print(f"   ❌ @{name}: {e}")
+        return f"{ok}/{len(config.TG_NEWS_CHANNELS)} kanal okunabiliyor"
+    finally:
+        client.disconnect()
+
+
+def pulse():
+    import re
+    from ai import GeminiAnalyzer
+    from binance_api import Binance
+    from market import Market
+    from news import NewsFeed
+    from pulse import MarketPulse
+    from scanner import MomentumScanner
+    b = Binance("", "", testnet=config.TEST_MODE)
+    feed = NewsFeed()
+    feed.fetch_fresh()                       # son başlıkları doldur
+    sc = MomentumScanner(b, feed)
+    sc.tick()                                # coin listesini doldur
+    m = Market(b)
+    m.refresh(force=True)
+    p = MarketPulse(b, feed, sc, m, GeminiAnalyzer())
+    data, text = p.collect()
+    print("   Kaynaklar: " + ", ".join(f"{k}: {v}" for k, v in p.status.items()))
+    for line in text.split("\n")[:9]:
+        print(f"   {line[:150]}")
+    if not p.run():
+        raise RuntimeError("Gemini nabız yorumu alınamadı (yoğunluk olabilir, bot çalışırken tekrar dener)")
+    print("   " + re.sub(r"<[^>]+>", "", p.brief_html()).replace("\n", "\n   "))
+    return "ok"
+
+
 def rss():
     from news import FEEDS, NewsFeed
     f = NewsFeed()
@@ -94,3 +147,5 @@ if __name__ == "__main__":
     step("RSS", rss)
     step("Hacim tarayıcı", scanner)
     step("Listeleme duyuruları", announcements)
+    step("Telegram kanalları", telegram_channels)
+    step("Piyasa Nabzı", pulse)

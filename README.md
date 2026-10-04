@@ -39,13 +39,20 @@ Kurulum için: **[KURULUM.md](KURULUM.md)**
      ve hacmi önceki saatin 3 katına çıkan coinler işaretlenir; son 6 saatte o coinle ilgili haber varsa Telegram'a bildirilir.
    - **Listeleme duyuruları:** Upbit ve Binance duyuruları dakikada bir, Coinbase'in yeni çiftleri 5 dakikada bir kontrol edilir.
    - `ALT_SIGNALS_TRADE=True` yapılınca bu sinyaller 8 puanlı haber gibi alım sürecine girer (rejim eşiği + ikinci görüş).
-8. **Kalibrasyon:** Analiz edilen her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı ölçülür (`data/calibration.csv`).
-9. **Telegram:** sinyaller, işlemler, rejim değişimleri, 20 dk'da bir özet, her gün 23:00'te detaylı rapor + yapay zeka yorumu.
-   Komutlar: `/durum`, `/rejim`, `/kalibrasyon`, `/rapor`, `/dosyalar`, `/yardim`.
+8. **Telegram haber kanalları (isteğe bağlı):** Watcher.Guru, Tree News, BWEnews, Wu Blockchain ve Binance duyuruları
+   senin hesabınla okunur (sadece bu kanallar); haberler RSS ile aynı yoldan geçer ama dakikalar önce gelir.
+9. **Piyasa Nabzı:** Saatte bir CoinGecko trendleri/sektörleri, Korku&Açgözlülük, Binance yükselenleri, hacim patlamaları ve
+   haber yoğunluğu Gemini'ye yorumlatılır; izleme listesindeki coinlerin haberleri +1 puan alır. Hacim patlamaları da
+   Gemini'ye "gerçek hikâye var mı?" diye sorulur.
+10. **Testnet öğrenme modu:** Testnette eşikler gevşek (işlem örnekleri birikmesi için); gerçek hesapta devre dışı.
+11. **Kalibrasyon:** Analiz edilen her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı ölçülür (`data/calibration.csv`).
+12. **Telegram:** sinyaller, işlemler, rejim değişimleri, 20 dk'da bir özet, her gün 23:00'te detaylı rapor + yapay zeka yorumu.
+   Komutlar: `/durum`, `/rejim`, `/nabiz`, `/kalibrasyon`, `/rapor`, `/dosyalar`, `/yardim`.
 
 ## Dosyalar
 - `bot.py` ana döngü · `news.py` RSS · `filters.py` kural filtresi · `ai.py` Gemini · `market.py` BTC rejimi
 - `scanner.py` hacim tarayıcı · `announcements.py` Upbit/Coinbase/Binance listeleme duyuruları
+- `pulse.py` Piyasa Nabzı · `tgnews.py` Telegram kanal okuyucu · `tg_login.py` Telegram tek seferlik giriş
 - `trader.py` alım/çıkış/pozisyon takibi · `binance_api.py` Binance REST · `calibration.py` ölçüm · `report.py` gece raporu
 - `config.py` tüm ayarlar · `check.py` kurulum testi · `analiz.py` kalibrasyon analizi · `start.sh` başlatıcı
 - `data/` → `signals.csv`, `calibration.csv`, `trades.csv`, `positions.json`, `reports/`, `bot.log` (otomatik oluşur)

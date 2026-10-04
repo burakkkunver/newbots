@@ -162,6 +162,10 @@ class Binance:
         return {d["symbol"]: float(d["price"])
                 for d in self._request("GET", "/api/v3/ticker/price", base=MARKET_DATA_URL)}
 
+    def real_tickers24_all(self):
+        """Gerçek piyasadaki tüm sembollerin 24 saatlik özeti (tek istek, ağırlık 80; saatte bir kullanılır)."""
+        return self._request("GET", "/api/v3/ticker/24hr", base=MARKET_DATA_URL)
+
     def real_ticker24(self, symbol):
         d = self._request("GET", "/api/v3/ticker/24hr", {"symbol": symbol}, base=MARKET_DATA_URL)
         return {"change_pct": float(d.get("priceChangePercent", 0)),

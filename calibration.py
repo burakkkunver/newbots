@@ -164,7 +164,9 @@ def score_bucket(row):
     return "?"
 
 
-ALT_NAMES = {"hacim_haberli": "Hacim patlaması + haber", "hacim_patlamasi": "Hacim patlaması (habersiz)"}
+ALT_NAMES = {"hacim_haberli": "Hacim patlaması + haber", "hacim_patlamasi": "Hacim patlaması (habersiz)",
+             "hacim_habersiz": "Hacim patlaması (habersiz)", "hacim_ai_onay": "Hacim + Gemini onayı",
+             "hacim_ai_red": "Hacim, Gemini reddetti", "hacim_ai_yok": "Hacim, Gemini yanıt vermedi"}
 
 
 def alt_group(row):

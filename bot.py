@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
 
 import config
 import filters
@@ -20,9 +21,11 @@ from announcements import AnnouncementWatcher
 from calibration import CALIB_CSV, HEADER as CALIB_HEADER, Calibrator, telegram_summary
 from market import Market, rules_text
 from news import NewsFeed
+from pulse import MarketPulse
 from notify import esc, poll_commands, send_document, send_long, send_telegram
 from report import REPORT_DIR, SIGNALS_CSV, SIGNALS_HEADER, Reporter
 from scanner import MomentumScanner
+from tgnews import TelegramNews
 from trader import TRADES_CSV, TRADES_HEADER, Trader
 from util import SRC_SCANNER, append_csv, fmt_ts, migrate_csv, today_str
 
@@ -30,6 +33,7 @@ MAX_AI_FAILS_PER_NEWS = 3
 HELP = ("🤖 <b>Komutlar</b>\n"
         "/durum — bakiye, açık pozisyonlar, BTC rejimi\n"
         "/rejim — BTC rejimi ve geçerli alım kuralları\n"
+        "/nabiz — Piyasa Nabzı: trend olan anlatılar ve izleme listesi (şimdi hazırlar)\n"
         "/kalibrasyon — haberlerden sonra fiyat gerçekte ne yaptı (son 7 gün)\n"
         "/rapor — gün sonu raporunu şimdi hazırla\n"
         "/dosyalar — CSV verilerini ve son raporu dosya olarak gönder\n"
@@ -68,7 +72,12 @@ class Bot:
         self.calib = Calibrator(self.trader.bx)
         self.scanner = MomentumScanner(self.trader.bx, self.feed)
         self.ann = AnnouncementWatcher()
-        self.reporter = Reporter(self.trader, self.market, self.ai, self.feed, self.scanner, self.ann)
+        self.pulse = MarketPulse(self.trader.bx, self.feed, self.scanner, self.market, self.ai)
+        self.tg = TelegramNews()
+        self.tg_pending = []
+        self.spike_ai_times = deque()
+        self.reporter = Reporter(self.trader, self.market, self.ai, self.feed, self.scanner, self.ann,
+                                 self.pulse, self.tg)
         self.ai_fails = {}
         self.analyzed = 0
         self.filtered = 0
@@ -86,6 +95,7 @@ class Bot:
         print(exch)
         regime = self.market.refresh(force=True)
         threading.Thread(target=self.trader.monitor_forever, args=(self.stop_event,), daemon=True).start()
+        self.tg.start()
         send_telegram(
             f"🚀 <b>Kripto Haber Botu Başlatıldı</b>\n\n{exch}\n"
             f"<b>Bot bütçesi:</b> {config.BUDGET_USDT:g} USDT | <b>Açık pozisyon:</b> {len(self.trader.positions)}\n"
@@ -97,9 +107,16 @@ class Bot:
             f"<b>İkinci görüş:</b> {esc(', '.join(self.ai.chains['review'][:2])) if config.REVIEW_ENABLED else 'kapalı'}\n"
             f"<b>Haber yaşı sınırı:</b> {config.MAX_NEWS_AGE_MIN:g} dk | <b>Gece raporu:</b> "
             f"{config.REPORT_HOUR:02d}:{config.REPORT_MINUTE:02d}\n"
-            f"<b>Hacim tarayıcı:</b> {'açık' if config.SCANNER_ENABLED else 'kapalı'} | <b>Listeleme duyuruları:</b> "
+            f"<b>Hacim tarayıcı:</b> {'açık' if config.SCANNER_ENABLED else 'kapalı'} "
+            f"(Gemini yorumu {'açık' if config.SPIKE_AI_ENABLED else 'kapalı'}) | <b>Listeleme duyuruları:</b> "
             f"{'açık' if config.ANNOUNCEMENTS_ENABLED else 'kapalı'} | <b>Bu sinyallerle alım:</b> "
-            f"{'AÇIK' if config.ALT_SIGNALS_TRADE else 'kapalı (sadece bildirim + kayıt)'}\n\n{HELP}")
+            f"{'AÇIK' if config.ALT_SIGNALS_TRADE else 'kapalı (sadece bildirim + kayıt)'}\n"
+            f"<b>Piyasa Nabzı:</b> {'her ' + format(config.PULSE_MINUTES, 'g') + ' dk' if config.PULSE_ENABLED else 'kapalı'}"
+            f" | <b>Telegram kanalları:</b> "
+            f"{esc(', '.join('@' + c for c in config.TG_NEWS_CHANNELS)) if self.tg.enabled else 'yapılandırılmadı'}\n"
+            + ("🧪 <b>Testnet öğrenme modu AÇIK:</b> eşikler 1 puan düşük, ikinci görüş güveni "
+               f"{config.REVIEW_MIN_CONFIDENCE:g}, hacim/listeleme sinyalleriyle alım açık.\n" if config.LEARNING else "")
+            + f"\n{HELP}")
 
     def known_bases(self):
         return {v["base"] for v in self.trader.bx.symbols.values()}
@@ -115,45 +132,82 @@ class Bot:
             print(f"❌ Alternatif sinyal hatası: {e}")
             traceback.print_exc()
 
-    def _alt_decide(self, item, res, code):
-        """Alım kapalıysa (varsayılan) sinyal sadece kayda geçer. Açıksa haber gibi alım sürecine girer."""
+    def _alt_decide(self, item, res, code, score=None):
+        """Alım kapalıysa sinyal sadece kayda geçer. Açıksa 'score' puanlı haber gibi alım sürecine girer."""
         regime = self.market.info()
         if not config.ALT_SIGNALS_TRADE:
             return code, "Sadece bildirim ve kayıt (ALT_SIGNALS_TRADE kapalı).", None, regime
-        trade_res = dict(res, puan=float(config.ALT_SIGNAL_SCORE), karar="BUY")
+        score = min(10.0, max(config.BUY_MIN_SCORE, float(score if score is not None else config.ALT_SIGNAL_SCORE)))
+        trade_res = dict(res, puan=score, karar="BUY")
         c, desc, review = self.decide(item, trade_res, regime)
         res.update(puan=trade_res["puan"], karar="BUY")
         return c, desc, review, regime
 
+    def _spike_budget_ok(self):
+        now = time.time()
+        while self.spike_ai_times and now - self.spike_ai_times[0] > 3600:
+            self.spike_ai_times.popleft()
+        if len(self.spike_ai_times) >= config.SPIKE_AI_MAX_PER_HOUR:
+            return False
+        self.spike_ai_times.append(now)
+        return True
+
     def handle_volume(self, sig):
-        coin, news = sig["coin"], sig["news"]
-        code = "HACIM_HABERLI" if news else "HACIM_HABERSIZ"
+        coin = sig["coin"]
+        news6 = sig.get("news") or []                # tarayıcının bulduğu son 6 saatin haberleri
+        news = news6 + [n for n in self.feed.headlines_about(coin, 24) if n not in news6]   # Gemini'ye 24 saat
+        ch24 = f"{sig['ch24']:+.1f}%" if sig.get("ch24") is not None else "bilinmiyor"
         title = (f"Hacim patlaması: {coin} {config.SCAN_WINDOW_MIN} dk'da +{sig['move']:.1f}%, "
                  f"hacim {sig['ratio']:.1f}x ({sig['vol'] / 1000:,.0f}K USDT)")
+        print(f"📡 {title} | {len(news)} ilgili başlık")
+        judge = None
+        if not config.SPIKE_AI_ENABLED:
+            code = "HACIM_HABERLI" if news6 else "HACIM_HABERSIZ"
+        elif not self._spike_budget_ok():
+            code = "HACIM_HABERSIZ"
+            print("   (saatlik Gemini sınırı doldu, değerlendirilmeden kaydedildi)")
+        else:
+            w = self.pulse.watch_entry(coin)
+            now = time.time()
+            heads = "\n".join(f"- [{n['source']}, {int((now - n['published']) / 60)} dk önce] {n['title']}"
+                              for n in news[:10]) or "- (hiç haber yok)"
+            judge = self.ai.judge_spike(
+                coin=coin, move=sig["move"], ratio=sig["ratio"], vol=f"{sig['vol'] / 1000:,.0f}K USDT", ch24=ch24,
+                trending="evet" if self.pulse.is_trending(coin) else "hayır",
+                watch=f"evet ({'★' * w['guc']}: {w['neden']})" if w else "hayır",
+                pulse=self.pulse.short_text(), regime=self.market.describe(), headlines=heads)
+            if judge is None:
+                code = "HACIM_AI_YOK"
+            elif judge["hikaye_var"] and judge["guc"] >= config.SPIKE_AI_MIN_SCORE:
+                code = "HACIM_AI_ONAY"
+            else:
+                code = "HACIM_AI_RED"
         item = {"id": f"hacim-{sig['symbol']}-{int(sig['ts'])}", "title": title, "source": SRC_SCANNER,
                 "link": (news[0]["link"] if news else f"https://www.binance.com/en/trade/{coin}_USDT")
                 + f"#hacim{int(sig['ts'])}",
-                "published": sig["ts"], "summary": " | ".join(n["title"] for n in news), "categories": ""}
-        res = {"hedef_coin": coin, "puan": None, "karar": "SINYAL",
-               "olay_turu": "hacim_haberli" if news else "hacim_patlamasi", "kesinlik": "resmi",
-               "yenilik": "yeni", "aktor": "yok", "olcek": "orta",
-               "sebep": ("İlgili haber: " + news[0]["title"]) if news else "Son saatlerde ilgili haber yok."}
-        print(f"📡 {title} | {'haberli' if news else 'habersiz'}")
-        if news:
-            final, desc, review, regime = self._alt_decide(item, res, code)
+                "published": sig["ts"], "summary": " | ".join(n["title"] for n in news[:5]), "categories": ""}
+        sebep = (judge["sebep"] if judge else
+                 (("İlgili haber: " + news[0]["title"]) if news else "Son 24 saatte ilgili haber yok."))
+        res = {"hedef_coin": coin, "puan": None, "karar": "SINYAL", "olay_turu": code.lower(), "kesinlik": "resmi",
+               "yenilik": "yeni", "aktor": "yok", "olcek": "orta", "sebep": sebep}
+        if code in ("HACIM_AI_ONAY", "HACIM_HABERLI"):   # HABERLI: Gemini değerlendirmesi kapalıyken eski yol
+            final, desc, review, regime = self._alt_decide(item, res, code, score=judge["guc"] if judge else None)
         else:
-            final, desc, review, regime = code, "Habersiz hacim patlaması, sadece kayıt.", None, self.market.info()
+            final, review, regime = code, None, self.market.info()
+            desc = {"HACIM_AI_RED": "Gemini gerçek bir hikâye görmedi, sadece kayıt.",
+                    "HACIM_AI_YOK": "Gemini yanıt vermedi, sadece kayıt."}.get(code, "Sadece kayıt.")
         review_txt = "" if not review else f"{'onay' if review['onay'] else 'red'} {review['guven']:.0f}"
         log_signal(item, res, regime["name"], review_txt, final, desc)
         self.calib.add(item, res, final, regime["name"], review_txt)
-        if final != "ALINDI" and (news or config.SCAN_NOTIFY_ALL):
-            ch24 = f"{sig['ch24']:+.1f}%" if sig.get("ch24") is not None else "?"
-            news_txt = "\n".join(f"• {esc(n['title'])} ({esc(n['source'])}, {fmt_ts(n['published'], False)})"
-                                 for n in news) or "• yok"
+        if final != "ALINDI" and (code in ("HACIM_AI_ONAY", "HACIM_HABERLI") or config.SCAN_NOTIFY_ALL):
+            news_txt = "\n".join(f"• {esc(n['title'][:120])} ({esc(n['source'])}, {fmt_ts(n['published'], False)})"
+                                 for n in news[:3]) or "• yok"
+            ai_txt = (f"\n<b>Gemini:</b> güç {judge['guc']:.0f}/10 — {esc(judge['sebep'])}\n"
+                      f"<b>Katalizör:</b> {esc(judge['katalizor'])} | <b>Risk:</b> {esc(judge['risk'])}" if judge else "")
             send_telegram(
                 f"📡 <b>HACİM PATLAMASI</b> — {esc(coin)}\n"
                 f"<b>{config.SCAN_WINDOW_MIN} dk:</b> +{sig['move']:.2f}% | <b>Hacim:</b> {sig['ratio']:.1f}x "
-                f"({sig['vol'] / 1000:,.0f}K USDT) | <b>24s:</b> {ch24}\n"
+                f"({sig['vol'] / 1000:,.0f}K USDT) | <b>24s:</b> {ch24}{ai_txt}\n"
                 f"<b>İlgili haberler:</b>\n{news_txt}\n<b>Durum:</b> {esc(desc)}")
 
     def handle_listing(self, ann):
@@ -189,6 +243,23 @@ class Bot:
                     f"<b>Coin:</b> {esc(coin)} | <b>Binance spot:</b> {spot} | <b>Testnet:</b> {testnet}\n"
                     f"<b>Durum:</b> {esc(desc)}\n{esc(ann['link'])}")
 
+    # ---------- Telegram kanal mesajları ----------
+    def tg_tick(self):
+        items = self.tg_pending + self.tg.drain()
+        self.tg_pending = []
+        if not items:
+            return
+        regime = self.market.info()
+        max_age = config.MAX_NEWS_AGE_MIN * 60
+        for it in items:
+            self.feed.add_recent(it)
+            if self.feed.is_seen(it) or time.time() - it["published"] > max_age:
+                continue
+            self.process(it, regime)
+            if not self.feed.is_seen(it) and self.ai_fails.get(it["id"], 0) < MAX_AI_FAILS_PER_NEWS:
+                self.tg_pending.append(it)   # Gemini yanıt vermedi, sonraki turda tekrar denenecek
+            self.poll(0)
+
     # ---------- haber işleme ----------
     def process(self, item, regime):
         print("-" * 60)
@@ -214,6 +285,7 @@ class Bot:
             return
         self.feed.mark_seen(item)
         self.analyzed += 1
+        self.pulse.apply_bonus(res)
 
         code, desc, review = self.decide(item, res, regime)
         print(f"💼 {code}: {desc}")
@@ -274,7 +346,8 @@ class Bot:
             self.market.describe(), self.ai.stats,
             f"{self.analyzed} haber analiz edildi, {self.filtered} kural filtresine takıldı | RSS sorunlu: {bad}\n"
             f"<b>Hacim tarayıcı:</b> {self.scanner.stats['scans']} tarama, {self.scanner.stats['signals']} sinyal "
-            f"({esc(self.scanner.status)})\n<b>Duyurular:</b> "
+            f"({esc(self.scanner.status)})\n<b>Telegram kanalları:</b> {esc(self.tg.status)}\n"
+            f"<b>Nabız:</b> {esc(self.pulse.short_text()[:300])}\n<b>Duyurular:</b> "
             + esc(", ".join(f"{k}: {v.split(' (')[0]}" for k, v in self.ann.status.items()))))
 
     def handle_command(self, cmd):
@@ -285,6 +358,11 @@ class Bot:
             info = self.market.refresh()
             send_telegram(f"🌍 <b>BTC rejimi:</b> {esc(self.market.describe(info))}\n"
                           f"<b>Kurallar:</b> {rules_text(info['name'])}")
+        elif cmd in ("/nabiz", "/nabız"):
+            send_telegram("🧭 Piyasa Nabzı hazırlanıyor...")
+            if not self.pulse.run():
+                send_telegram("⚠️ Nabız şu an hazırlanamadı (Gemini yanıt vermedi), son geçerli nabız:")
+            send_long(self.pulse.brief_html())
         elif cmd in ("/kalibrasyon", "/kalib"):
             send_long(telegram_summary(7))
         elif cmd == "/rapor":
@@ -317,12 +395,17 @@ class Bot:
             cycle = time.time()
             try:
                 self.alt_tick()
+                self.tg_tick()
                 regime = self.market.refresh()
+                if self.pulse.due() and self.pulse.run() and self.pulse.should_notify():
+                    send_long(self.pulse.brief_html())
+                    self.pulse.mark_notified()
                 items = self.feed.fetch_fresh()
                 for item in items[:config.MAX_ANALYSES_PER_CYCLE]:
                     self.process(item, regime)
                     self.poll(0)   # uzun analizlerde de komutlar cevapsız kalmasın
                     self.alt_tick()
+                    self.tg_tick()   # Telegram haberleri RSS'i beklemeden işlensin
                 done = self.calib.process_due()
                 if done:
                     print(f"🎯 {done} kalibrasyon ölçümü tamamlandı.")
@@ -350,8 +433,9 @@ class Bot:
                 left = config.POLL_SECONDS - (time.time() - cycle)
                 if left <= 1:
                     break
-                self.poll(min(left, 20))
+                self.poll(min(left, 10))
                 self.alt_tick()   # tarayıcı ve duyurular kendi zamanlamasıyla çalışır
+                self.tg_tick()
 
 
 def main():
