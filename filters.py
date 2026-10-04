@@ -107,6 +107,9 @@ def title_mentions(title, coin):
     """Başlıkta bu coin geçiyor mu? Sembol (UNI, $UNI) veya tam adı (Uniswap) aranır."""
     if not coin or coin == "GENEL":
         return False
-    if re.search(r"(?<![A-Za-z0-9])\$?" + re.escape(coin) + r"(?![A-Za-z0-9])", title):
+    # Kısa veya sıradan kelimeye benzeyen semboller (AI, ONE, GAS...) sadece "$AI" şeklinde yazılmışsa sayılır;
+    # yoksa "OpenAI / AI models" gibi başlıklar yanlışlıkla AI coiniyle eşleşir.
+    prefix = r"\$" if (len(coin) <= 2 or coin in _STOP_TICKERS) else r"\$?"
+    if re.search(r"(?<![A-Za-z0-9])" + prefix + re.escape(coin) + r"(?![A-Za-z0-9])", title):
         return True
     return any(sym == coin and rx.search(title) for rx, sym in _NAME_RE)
