@@ -132,14 +132,14 @@ class Bot:
             print(f"❌ Alternatif sinyal hatası: {e}")
             traceback.print_exc()
 
-    def _alt_decide(self, item, res, code, score=None):
+    def _alt_decide(self, item, res, code, score=None, fast=None):
         """Alım kapalıysa sinyal sadece kayda geçer. Açıksa 'score' puanlı haber gibi alım sürecine girer."""
         regime = self.market.info()
         if not config.ALT_SIGNALS_TRADE:
             return code, "Sadece bildirim ve kayıt (ALT_SIGNALS_TRADE kapalı).", None, regime
         score = min(10.0, max(config.BUY_MIN_SCORE, float(score if score is not None else config.ALT_SIGNAL_SCORE)))
         trade_res = dict(res, puan=score, karar="BUY")
-        c, desc, review = self.decide(item, trade_res, regime)
+        c, desc, review = self.decide(item, trade_res, regime, fast=fast)
         res.update(puan=trade_res["puan"], karar="BUY")
         return c, desc, review, regime
 
@@ -191,7 +191,12 @@ class Bot:
         res = {"hedef_coin": coin, "puan": None, "karar": "SINYAL", "olay_turu": code.lower(), "kesinlik": "resmi",
                "yenilik": "yeni", "aktor": "yok", "olcek": "orta", "sebep": sebep}
         if code in ("HACIM_AI_ONAY", "HACIM_HABERLI"):   # HABERLI: Gemini değerlendirmesi kapalıyken eski yol
-            final, desc, review, regime = self._alt_decide(item, res, code, score=judge["guc"] if judge else None)
+            fast = None
+            if judge and config.SPIKE_SKIP_REVIEW:
+                fast = {"skip_review": True,
+                        "note": f"⚡ <b>Hacim patlaması + Gemini onayı</b> (güç {judge['guc']:.0f}): {esc(judge['katalizor'])}"}
+            final, desc, review, regime = self._alt_decide(item, res, code, score=judge["guc"] if judge else None,
+                                                           fast=fast)
         else:
             final, review, regime = code, None, self.market.info()
             desc = {"HACIM_AI_RED": "Gemini gerçek bir hikâye görmedi, sadece kayıt.",
@@ -229,7 +234,9 @@ class Bot:
                    "kesinlik": "resmi", "yenilik": "yeni", "aktor": "birinci_lig", "olcek": "orta",
                    "sebep": f"{ann['source']} listeleme duyurusu"}
             if spot.startswith("var"):
-                final, desc, review, regime = self._alt_decide(item, res, "LISTELEME")
+                fast = self.listing_fast(f"{ann['source']} listeleme duyurusu") if config.LISTING_FAST_PATH else None
+                final, desc, review, regime = self._alt_decide(item, res, "LISTELEME", score=config.LISTING_SCORE,
+                                                               fast=fast)
             else:
                 final, desc, review = "LISTELEME", "Coin Binance spotta işlem görmüyor, sadece kayıt.", None
                 regime = self.market.info()
@@ -287,7 +294,11 @@ class Bot:
         self.analyzed += 1
         self.pulse.apply_bonus(res)
 
-        code, desc, review = self.decide(item, res, regime)
+        fast = None
+        if (config.LISTING_FAST_PATH and res.get("olay_turu") == "listeleme" and res.get("aktor") == "birinci_lig"
+                and res.get("kesinlik") == "resmi" and res["puan"] >= 9):
+            fast = self.listing_fast(f"listeleme haberi ({item['source']})")
+        code, desc, review = self.decide(item, res, regime, fast=fast)
         print(f"💼 {code}: {desc}")
         if code == "IKINCI_GORUS_YOK":
             review_txt = "alinamadi"
@@ -299,25 +310,35 @@ class Bot:
         self.calib.add(item, res, code, regime["name"], review_txt)
         self.notify_decision(item, res, regime, code, desc, review)
 
-    def decide(self, item, res, regime):
-        """(durum_kodu, açıklama, ikinci_görüş) döner."""
+    def decide(self, item, res, regime, fast=None):
+        """(durum_kodu, açıklama, ikinci_görüş) döner.
+        fast: hızlı yol ayarları {"skip_review", "late_limit", "exit", "note"} (listeleme / onaylı hacim patlaması)."""
+        fast = fast or {}
         if res["karar"] != "BUY":
             return "PASS", "", None
         if res["puan"] < regime["min_score"]:
             return "REJIM_ESIGI", f"{regime['ad']} rejiminde alım için en az {regime['min_score']} puan gerekli.", None
-        ok, code, desc, ctx = self.trader.precheck(res["hedef_coin"], res["puan"], item, regime)
+        ok, code, desc, ctx = self.trader.precheck(res["hedef_coin"], res["puan"], item, regime,
+                                                   late_limit=fast.get("late_limit"))
         if not ok:
             return code, desc, None
         review = None
-        if config.REVIEW_ENABLED:
+        if config.REVIEW_ENABLED and not fast.get("skip_review"):
             review = self.ai.review(item, res, ctx, self.market.describe(regime))
             if review is None:
                 return "IKINCI_GORUS_YOK", "İkinci görüş alınamadı (Gemini yoğun), güvenlik için alım yapılmadı.", None
             if not review["onay"]:
                 why = review["sebep"] or "; ".join(review["karsi"])
                 return "IKINCI_GORUS_RED", f"İkinci görüş reddetti (güven {review['guven']:.0f}): {why}", review
-        code, desc = self.trader.execute_buy(ctx, res, item, regime, review)
+        trade_regime = dict(regime, exit=fast["exit"]) if fast.get("exit") else regime
+        code, desc = self.trader.execute_buy(ctx, res, item, trade_regime, review, note=fast.get("note", ""))
         return code, desc, review
+
+    @staticmethod
+    def listing_fast(source_txt):
+        return {"skip_review": True, "late_limit": config.LISTING_MAX_LATE_PCT, "exit": "trailing",
+                "note": f"⚡ <b>Hızlı yol:</b> {source_txt} — ikinci görüş beklenmedi, 'tren kaçtı' sınırı "
+                        f"%{config.LISTING_MAX_LATE_PCT:g}, çıkış izleyen stopla."}
 
     def notify_decision(self, item, res, regime, code, desc, review):
         if code == "ALINDI":

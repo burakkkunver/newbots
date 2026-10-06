@@ -24,7 +24,8 @@ POSITIONS_FILE = os.path.join(config.DATA_DIR, "positions.json")
 STATE_FILE = os.path.join(config.DATA_DIR, "state.json")
 TRADES_CSV = os.path.join(config.DATA_DIR, "trades.csv")
 TRADES_HEADER = ["acilis", "kapanis", "sembol", "puan", "rejim", "mod", "giris", "cikis", "maliyet_usdt",
-                 "kar_usdt", "kar_yuzde", "zirve_yuzde", "cikis_sebebi", "sure_dk", "olay_turu", "kaynak", "haber"]
+                 "kar_usdt", "kar_yuzde", "zirve_yuzde", "cikis_sebebi", "sure_dk", "olay_turu", "kaynak",
+                 "gercek_giris", "gercek_cikis", "gercek_kar_yuzde", "haber"]
 
 STABLES = {"USDT", "USDC", "FDUSD", "DAI", "TUSD", "BUSD", "USDE", "USDP", "PYUSD", "EUR", "TRY", "GENEL", ""}
 CLOSED_STATUSES = ("CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH")
@@ -136,7 +137,7 @@ class Trader:
         return amount, ""
 
     # ---------- alım ----------
-    def precheck(self, coin, score, item, regime):
+    def precheck(self, coin, score, item, regime, late_limit=None):
         """Alım yapılabilir mi? (ok, kod, açıklama, ctx). Ucuz kontroller ikinci görüşten ÖNCE yapılır."""
         coin = (coin or "").upper()
         if coin in STABLES:
@@ -161,7 +162,8 @@ class Trader:
             where = "testnet" if config.TEST_MODE else "Binance"
             return False, "ENGEL_TESTNET", f"{symbol} {where} üzerinde işlem görmüyor.", {}
 
-        ctx = {"symbol": symbol, "coin": coin, "info": info, "late_move": None}
+        late_limit = config.LATE_MOVE_PCT if late_limit is None else late_limit
+        ctx = {"symbol": symbol, "coin": coin, "info": info, "late_move": None, "late_limit": late_limit}
         # Geç kalma kontrolü: haber yayınlandığından beri gerçek piyasada fiyat ne kadar gitti?
         try:
             p_news = self.bx.real_price_at(symbol, item["published"])
@@ -169,7 +171,7 @@ class Trader:
             if p_news:
                 move = pct(self.bx.real_price(symbol), p_news)
                 ctx["late_move"] = move
-                if move >= config.LATE_MOVE_PCT:
+                if move >= late_limit:
                     return False, "ENGEL_TREN", f"Tren kaçtı: haberden sonra fiyat zaten %{move:.2f} yükselmiş.", ctx
         except Exception as e:
             ctx["late_note"] = f"gerçek fiyat kontrol edilemedi: {getattr(e, 'msg', e)}"
@@ -185,18 +187,20 @@ class Trader:
         ctx["amount"] = amount
         return True, "OK", "", ctx
 
-    def execute_buy(self, ctx, res, item, regime, review=None):
+    def execute_buy(self, ctx, res, item, regime, review=None, note=""):
         """Market alım + koruma emirleri. (kod, açıklama) döner; kod 'ALINDI' ise işlem açıldı."""
         symbol, info, score = ctx["symbol"], ctx["info"], res["puan"]
-        # İkinci görüş beklenirken fiyat kaçtı mı?
-        if ctx.get("p_news"):
-            try:
-                move = pct(self.bx.real_price(symbol), ctx["p_news"])
+        # İkinci görüş beklenirken fiyat kaçtı mı? (aynı anda gölge K/Z için gerçek giriş fiyatı)
+        real_entry = None
+        try:
+            real_entry = self.bx.real_price(symbol)
+            if ctx.get("p_news"):
+                move = pct(real_entry, ctx["p_news"])
                 ctx["late_move"] = move
-                if move >= config.LATE_MOVE_PCT:
+                if move >= ctx.get("late_limit", config.LATE_MOVE_PCT):
                     return "ENGEL_TREN", f"Tren kaçtı (ikinci görüş beklenirken): fiyat %{move:.2f} yükseldi."
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         with self.lock:
             if any(p["symbol"] == symbol for p in self.positions):
@@ -230,7 +234,7 @@ class Trader:
                 "time_stop": rules["time_stop"], "time_stop_done": False,
                 "protection": "soft", "order_list_id": None, "stop_order_id": None, "order_id": None,
                 "event": res.get("olay_turu", ""), "title": item["title"], "link": item["link"],
-                "source": item["source"],
+                "source": item["source"], "real_entry": real_entry,
             }
             prot_note = self._protect_new(pos, info)
             self.positions.append(pos)
@@ -246,6 +250,10 @@ class Trader:
         late = ctx.get("late_move")
         rv = (f"\n<b>İkinci görüş:</b> onay (güven {review['guven']:.0f}) — {esc(review['sebep'])}"
               if review else "")
+        if note:
+            rv += f"\n{note}"
+        if real_entry and abs(pct(entry, real_entry)) >= 1:
+            rv += f"\n<i>Not: testnet fiyatı gerçek piyasadan %{pct(entry, real_entry):+.1f} farklı ({real_entry:.6g}).</i>"
         self._notify(
             f"✅ <b>İşlem Açıldı, Emirler Girildi</b>{' (TESTNET)' if config.TEST_MODE else ''}\n\n"
             f"<b>Çift:</b> {symbol} | <b>Puan:</b> {score:.0f}/10\n"
@@ -494,6 +502,14 @@ class Trader:
         pnl = pos["cost"] * pnl_pct / 100
         peak_pct = pct(pos["peak"], pos["entry"])
         minutes = int((time.time() - pos["opened_at"]) / 60)
+        # Gölge K/Z: aynı işlem gerçek Binance fiyatlarıyla ne kazandırırdı?
+        real_entry, real_exit, real_pct = pos.get("real_entry"), None, None
+        if real_entry:
+            try:
+                real_exit = self.bx.real_price(pos["symbol"])
+                real_pct = pct(real_exit, real_entry)
+            except Exception:
+                pass
         with self.lock:
             self.state["realized_pnl"] += pnl
             self.state["cooldown"][pos["symbol"]] = time.time() + config.COIN_COOLDOWN_MIN * 60
@@ -501,7 +517,7 @@ class Trader:
                 "symbol": pos["symbol"], "score": pos["score"], "regime": pos.get("regime", "?"),
                 "mode": pos["mode"], "pnl": pnl, "pct": pnl_pct, "peak_pct": peak_pct, "reason": reason,
                 "opened_at": pos["opened_at"], "closed_at": time.time(), "minutes": minutes,
-                "title": pos["title"][:120], "event": pos.get("event", "")})
+                "title": pos["title"][:120], "event": pos.get("event", ""), "real_pct": real_pct})
             self.state["closed"] = self.state["closed"][-500:]
             self.positions = [p for p in self.positions if p["id"] != pos["id"]]
             self._save()
@@ -509,7 +525,8 @@ class Trader:
             fmt_ts(pos["opened_at"]), fmt_ts(time.time()), pos["symbol"], int(pos["score"]),
             pos.get("regime", "?"), pos["mode"], f"{pos['entry']:.8g}", f"{exit_price:.8g}", f"{pos['cost']:.2f}",
             f"{pnl:.4f}", f"{pnl_pct:.2f}", f"{peak_pct:.2f}", reason, minutes, pos.get("event", ""),
-            pos.get("source", ""), pos["title"]])
+            pos.get("source", ""), f"{real_entry:.8g}" if real_entry else "", f"{real_exit:.8g}" if real_exit else "",
+            f"{real_pct:.2f}" if real_pct is not None else "", pos["title"]])
         icon = "🟢" if pnl >= 0 else "🔴"
         self._notify(
             f"{icon} <b>Pozisyon Kapandı</b> — {esc(reason)}\n\n<b>Çift:</b> {pos['symbol']} "
@@ -517,7 +534,8 @@ class Trader:
             f"<b>Giriş → Çıkış:</b> {pos['entry']:.6g} → {exit_price:.6g}\n"
             f"<b>Kâr/Zarar:</b> {pnl:+.2f} USDT ({pnl_pct:+.2f}%) | <b>Zirve:</b> +{peak_pct:.2f}%\n"
             f"<b>Süre:</b> {minutes} dk\n"
-            f"<b>Toplam gerçekleşen:</b> {self.state['realized_pnl']:+.2f} USDT")
+            + (f"<b>Gerçek piyasada:</b> {real_entry:.6g} → {real_exit:.6g} ({real_pct:+.2f}%)\n" if real_pct is not None else "")
+            + f"<b>Toplam gerçekleşen:</b> {self.state['realized_pnl']:+.2f} USDT")
 
     # ---------- özet ----------
     def closed_today(self):

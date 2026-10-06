@@ -90,7 +90,7 @@ def parse_coinbase(data):
 
 
 SOURCES = [
-    {"name": SRC_UPBIT, "interval": 60, "parse": parse_upbit,
+    {"name": SRC_UPBIT, "interval": config.UPBIT_POLL_SECONDS, "parse": parse_upbit,
      "url": "https://api-manager.upbit.com/api/v1/announcements?os=web&page=1&per_page=20&category=trade"},
     {"name": SRC_BINANCE, "interval": 60, "parse": parse_binance,
      "url": "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query?type=1&pageNo=1&pageSize=15&catalogId=48"},

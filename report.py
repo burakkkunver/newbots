@@ -105,8 +105,9 @@ class Reporter:
             S.append(f"\n📈 <b>Bugünkü işlemler</b> ({len(closed)} işlem, {wins} kârlı, kazanma %{100 * wins / len(closed):.0f})")
             for c in closed:
                 mode = {"trailing": "izleyen", "fixed": "sabit"}.get(c.get("mode"), "eski sürüm")
+                real = f", gerçek piyasada {c['real_pct']:+.2f}%" if c.get("real_pct") is not None else ""
                 S.append(f"• {c.get('symbol', '?')} {int(c.get('score') or 0)}/10 [{c.get('regime', '?')}, {mode}] "
-                         f"{c.get('pct', 0):+.2f}% (zirve +{c.get('peak_pct') or 0:.1f}%) — "
+                         f"{c.get('pct', 0):+.2f}% (zirve +{c.get('peak_pct') or 0:.1f}%{real}) — "
                          f"{esc(c.get('reason', '?'))}, {c.get('minutes', '?')} dk")
             S.append("Çıkış sebepleri: " + ", ".join(f"{esc(k.split(' (')[0])} {v}"
                                                       for k, v in _counts([c.get("reason", "?") for c in closed])))

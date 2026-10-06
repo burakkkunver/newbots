@@ -45,6 +45,8 @@ Kurulum için: **[KURULUM.md](KURULUM.md)**
    haber yoğunluğu Gemini'ye yorumlatılır; izleme listesindeki coinlerin haberleri +1 puan alır. Hacim patlamaları da
    Gemini'ye "gerçek hikâye var mı?" diye sorulur.
 10. **Testnet öğrenme modu:** Testnette eşikler gevşek (işlem örnekleri birikmesi için); gerçek hesapta devre dışı.
+    **Hızlı yol:** Listelemeler (Upbit/Coinbase/9-10 puanlı resmi listeleme haberi) ve Gemini onaylı hacim patlamaları
+    ikinci görüş beklemeden alınır; listelemelerde "tren kaçtı" sınırı %30. Her işlemde gerçek piyasa K/Z'si de kaydedilir.
 11. **Kalibrasyon:** Analiz edilen her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı ölçülür (`data/calibration.csv`).
 12. **Telegram:** sinyaller, işlemler, rejim değişimleri, 20 dk'da bir özet, her gün 23:00'te detaylı rapor + yapay zeka yorumu.
    Komutlar: `/durum`, `/rejim`, `/nabiz`, `/kalibrasyon`, `/rapor`, `/dosyalar`, `/yardim`.

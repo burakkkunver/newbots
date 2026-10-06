@@ -321,6 +321,15 @@ Kısa özet 4 saatte bir Telegram'a gelir. İstediğin an `/nabiz` yazabilirsin.
 
 Kapatmak için `env.sh`'e `export TESTNET_OGRENME="False"` ekle. Gerçek hesapta (`TEST_MODE="False"`) bu mod hiçbir zaman devreye girmez.
 
+**Hızlı yol** (verilere göre eklendi):
+- **Listelemeler:** Upbit/Coinbase listeleme duyuruları ve resmi, birinci lig listeleme haberleri (puan 9-10) ikinci görüş beklemeden alınır. "Tren kaçtı" sınırı %3 yerine %30, çıkış izleyen stopla yapılır. Örnek: NMR'nin Upbit listelemesi haber anında +%27'deydi, sonra 1 saatte +%24,5 daha gitti.
+- **Hacim patlamaları:** Gemini'nin "gerçek hikâye var" dediği hacim patlamalarına ikinci görüş sorulmaz. Örnek: ikinci görüş bunların 6'sını da reddetmişti, oysa 4'ü 1 saatte +%2'nin üstüne çıktı.
+- **Haberler:** Normal haberlerde ikinci görüş aynen devam eder; veriler orada haklı olduğunu gösteriyor.
+
+Kapatmak için: `export LISTING_FAST_PATH="False"` / `export SPIKE_SKIP_REVIEW="False"`.
+
+**Gerçek piyasa K/Z'si:** Testnet fiyatları büyük coinlerde gerçek piyasayı takip ediyor, ama küçük coinlerin ani hareketlerinde farklı gidebilir. Bu yüzden her işlemde giriş ve çıkış anındaki gerçek Binance fiyatı da kaydedilir. Kapanış mesajında ve gece raporunda "Gerçek piyasada: +X%" satırı olarak, `trades.csv`'de `gercek_*` sütunları olarak görünür. Stratejinin gerçek performansını bu sütunlar gösterir.
+
 ---
 
 ## 10. Kod güncellendiğinde

@@ -77,6 +77,10 @@ def main():
         wins = sum(1 for v in pnl if v > 0)
         print(f"Toplam K/Z: {sum(pnl):+.2f} USDT | kazanma oranı: %{100 * wins / len(pnl):.0f} | "
               f"ortalama: {sum(float(t['kar_yuzde']) for t in trades) / len(trades):+.2f}%")
+        real = [float(t["gercek_kar_yuzde"]) for t in trades if t.get("gercek_kar_yuzde")]
+        if real:
+            print(f"Aynı işlemler gerçek piyasa fiyatlarıyla: ortalama {sum(real) / len(real):+.2f}% "
+                  f"| kazanan %{100 * sum(1 for v in real if v > 0) / len(real):.0f} ({len(real)} işlem)")
         for key, name in (("cikis_sebebi", "Çıkış sebebi"), ("rejim", "Rejim"), ("puan", "Puan"), ("mod", "Mod")):
             groups = {}
             for t in trades:

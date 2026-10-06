@@ -162,6 +162,16 @@ ALT_SIGNAL_SCORE = _float("ALT_SIGNAL_SCORE", 8)
 SPIKE_AI_ENABLED = _bool("SPIKE_AI_ENABLED", True)
 SPIKE_AI_MIN_SCORE = _float("SPIKE_AI_MIN_SCORE", 7)        # Gemini'nin hikâye gücü puanı en az bu olmalı
 SPIKE_AI_MAX_PER_HOUR = _int("SPIKE_AI_MAX_PER_HOUR", 30)   # maliyet sınırı
+# Gemini'nin onayladığı hacim patlamalarına ikinci görüş sorulmaz (veri: ikinci görüş 6/6 reddetti, 4'ü +%2'yi geçti;
+# hacim yorumunu yapan Gemini zaten 24 saatlik yükselişi ve haberleri görüyor)
+SPIKE_SKIP_REVIEW = _bool("SPIKE_SKIP_REVIEW", True)
+# Listeleme hızlı yolu: Upbit/Coinbase listelemeleri ve resmi, birinci lig listeleme haberleri (puan >= 9)
+# ikinci görüş beklemeden alınır; "tren kaçtı" sınırı %3 yerine LISTING_MAX_LATE_PCT, çıkış izleyen stopla.
+# (veri: NMR Upbit listelemesi haberde +%27'deydi, sonra 1 saatte +%24,5 daha gitti)
+LISTING_FAST_PATH = _bool("LISTING_FAST_PATH", True)
+LISTING_MAX_LATE_PCT = _float("LISTING_MAX_LATE_PCT", 30)
+LISTING_SCORE = _float("LISTING_SCORE", 10)                 # borsa duyurusundan gelen listelemenin puanı
+UPBIT_POLL_SECONDS = _int("UPBIT_POLL_SECONDS", 20)
 
 # ==========================================
 # PİYASA NABZI (trend radarı)
