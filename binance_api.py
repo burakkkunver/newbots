@@ -170,7 +170,14 @@ class Binance:
         d = self._request("GET", "/api/v3/ticker/24hr", {"symbol": symbol}, base=MARKET_DATA_URL)
         return {"change_pct": float(d.get("priceChangePercent", 0)),
                 "quote_volume": float(d.get("quoteVolume", 0)),
-                "price": float(d.get("lastPrice", 0))}
+                "price": float(d.get("lastPrice", 0)),
+                "bid": float(d.get("bidPrice", 0) or 0), "ask": float(d.get("askPrice", 0) or 0)}
+
+    def real_books(self, symbols):
+        """Gerçek piyasada en iyi alış (bid) / satış (ask) fiyatları, tek istekte: {sembol: (bid, ask)}"""
+        data = self._request("GET", "/api/v3/ticker/bookTicker",
+                             {"symbols": json.dumps(sorted(set(symbols)), separators=(",", ":"))}, base=MARKET_DATA_URL)
+        return {d["symbol"]: (float(d["bidPrice"]), float(d["askPrice"])) for d in data}
 
     # ---------- hesap ----------
     def balances(self):

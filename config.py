@@ -56,8 +56,15 @@ TIMEZONE = os.getenv("BOT_TIMEZONE", "Europe/Istanbul")
 # Elle model yazılırsa önce onlar denenir. 503/429 gelirse sıradaki modele geçilir.
 GEMINI_MODELS = _list("GEMINI_MODELS")
 GEMINI_RETRIES_PER_MODEL = _int("GEMINI_RETRIES_PER_MODEL", 2)
-# İkinci görüş ve gece raporu için güçlü modeller. Boşsa en yeni "pro" modeller otomatik seçilir.
+# İkinci görüş için güçlü modeller. Boşsa en yeni "pro" modeller otomatik seçilir.
 REVIEW_MODELS = _list("REVIEW_MODELS")
+# Günlük tahmini Gemini harcaması bu tutara ulaşınca önce Piyasa Nabzı (%70'te), sonra hacim patlaması yorumu (%100'de)
+# gece yarısına kadar durur; haber analizi, ikinci görüş ve gece raporu devam eder. 0.15 $/gün ≈ 200 TL/ay. 0 = sınırsız.
+GEMINI_GUNLUK_BUTCE_USD = _float("GEMINI_GUNLUK_BUTCE_USD", 0.15)
+USD_TRY = _float("USD_TRY", 45)                        # raporlardaki TL karşılığı için yaklaşık kur
+AI_ALERT_AFTER_FAILS = _int("AI_ALERT_AFTER_FAILS", 5)  # art arda bu kadar başarısız çağrıda Telegram'a uyarı
+AI_PAUSE_AFTER_FAILS = _int("AI_PAUSE_AFTER_FAILS", 6)  # bu kadar hatada Gemini'ye kısa mola (döngü boşuna beklemesin)
+AI_PAUSE_MIN = _float("AI_PAUSE_MIN", 5)
 # Alım adayları ikinci bir modele "şeytanın avukatı" olarak sorulsun mu?
 REVIEW_ENABLED = _bool("REVIEW_ENABLED", True)
 # ikinci görüşün güveni (0-100) en az bu olmalı (öğrenme modunda 50)
@@ -161,7 +168,10 @@ ALT_SIGNAL_SCORE = _float("ALT_SIGNAL_SCORE", 8)
 # Hacim patlamaları Gemini'ye "arkasında gerçek bir hikâye var mı?" diye sorulur
 SPIKE_AI_ENABLED = _bool("SPIKE_AI_ENABLED", True)
 SPIKE_AI_MIN_SCORE = _float("SPIKE_AI_MIN_SCORE", 7)        # Gemini'nin hikâye gücü puanı en az bu olmalı
-SPIKE_AI_MAX_PER_HOUR = _int("SPIKE_AI_MAX_PER_HOUR", 30)   # maliyet sınırı
+SPIKE_AI_MAX_PER_HOUR = _int("SPIKE_AI_MAX_PER_HOUR", 12)   # maliyet sınırı
+# Gemini'ye sadece hikâye kanıtı olan patlamalar sorulur: son 24 saatte coinle ilgili haber, CoinGecko trendi veya
+# nabız izleme listesi. (veri: haberi olmayan patlamaların neredeyse hepsini Gemini zaten reddetti -> boşa maliyet)
+SPIKE_AI_REQUIRE_EVIDENCE = _bool("SPIKE_AI_REQUIRE_EVIDENCE", True)
 # Gemini'nin onayladığı hacim patlamalarına ikinci görüş sorulmaz (veri: ikinci görüş 6/6 reddetti, 4'ü +%2'yi geçti;
 # hacim yorumunu yapan Gemini zaten 24 saatlik yükselişi ve haberleri görüyor)
 SPIKE_SKIP_REVIEW = _bool("SPIKE_SKIP_REVIEW", True)
@@ -174,12 +184,28 @@ LISTING_SCORE = _float("LISTING_SCORE", 10)                 # borsa duyurusundan
 UPBIT_POLL_SECONDS = _int("UPBIT_POLL_SECONDS", 20)
 
 # ==========================================
+# SANAL İŞLEM (gerçek fiyatlarla "almış gibi yap")
+# ==========================================
+# Sinyal gelen coin Binance testnette (ya da hiç Binance'te) yoksa bot coini almış gibi yapar, gerçek fiyatını
+# (Binance gerçek piyasa -> Gate.io -> MEXC) takip eder ve testnetle aynı kurallarla satar. Para harcanmaz, kayıt tutulur.
+PAPER_ENABLED = _bool("PAPER_ENABLED", True)
+# Her testnet alımının gerçek Binance fiyatlarıyla kopyası ("ayna"). Testnette küçük coinlerin fiyatı gerçek piyasadan
+# çok farklı gidebiliyor (RSR: testnet -%0,25, aynı anda gerçek piyasa +%35); stratejinin gerçek sonucunu ayna gösterir.
+PAPER_MIRROR = _bool("PAPER_MIRROR", True)
+PAPER_BUDGET_USDT = _float("PAPER_BUDGET_USDT", BUDGET_USDT)     # sanal işlemlerin ayrı bütçesi
+PAPER_MAX_OPEN = _int("PAPER_MAX_OPEN", 5)
+PAPER_CHECK_SECONDS = _int("PAPER_CHECK_SECONDS", 20)             # fiyat kaç saniyede bir kontrol edilsin
+PAPER_FEE_PCT = _float("PAPER_FEE_PCT", 0.1)                      # her alım ve satışta düşülen komisyon (%)
+PAPER_MIN_VOL_USDT = _float("PAPER_MIN_VOL_USDT", 100000)         # 24s hacmi bunun altındaki coin sanal alınmaz
+PAPER_VENUES = [v.lower() for v in _list("PAPER_VENUES")] or ["binance", "gateio", "mexc"]
+
+# ==========================================
 # PİYASA NABZI (trend radarı)
 # ==========================================
-# Her saat: CoinGecko trend coin/sektörler + Korku&Açgözlülük + Binance en çok yükselenler + hacim patlamaları
+# Her PULSE_MINUTES dakikada: CoinGecko trend coin/sektörler + Korku&Açgözlülük + Binance en çok yükselenler + hacim patlamaları
 # + haber yoğunluğu -> Gemini yorumu ve izleme listesi. İzleme listesindeki coinlerin haberlerine puan bonusu.
 PULSE_ENABLED = _bool("PULSE_ENABLED", True)
-PULSE_MINUTES = _float("PULSE_MINUTES", 60)
+PULSE_MINUTES = _float("PULSE_MINUTES", 120)
 PULSE_NOTIFY_HOURS = _float("PULSE_NOTIFY_HOURS", 4)       # Telegram'a kaç saatte bir özet gelsin (0 = hiç)
 PULSE_SCORE_BONUS = _float("PULSE_SCORE_BONUS", 1)         # izleme listesindeki coin haberine eklenecek puan
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")     # isteğe bağlı (ücretsiz "demo" anahtarı)

@@ -1,5 +1,5 @@
-"""Kurulum testi: Telegram, Gemini (analiz + ikinci görüş), Binance, BTC rejimi ve RSS bağlantılarını dener.
-Emir GÖNDERMEZ.  Çalıştırma: source env.sh && source venv/bin/activate && python3 check.py"""
+"""Kurulum testi: Telegram, Gemini (analiz + ikinci görüş), Binance, BTC rejimi, RSS, sanal işlem fiyat kaynakları
+ve diğer bağlantıları dener. Emir GÖNDERMEZ.  Çalıştırma: source env.sh && source venv/bin/activate && python3 check.py"""
 import time
 
 import config
@@ -18,11 +18,15 @@ def gemini():
     a = GeminiAnalyzer()
     flash = [n for n in a.available if "flash" in n or "pro" in n]
     print(f"   Erişilebilir flash/pro modelleri ({len(flash)}): {', '.join(flash) or 'YOK'}")
+    print(f"   Haber analizi (ucuz): {', '.join(a.chains['cheap'][:3])}")
+    print(f"   Hacim / nabız / rapor: {', '.join(a.chains['main'][:3])}")
+    print(f"   Harcama: {a.spend_line()}")
     item = {"source": "test", "published": time.time(), "summary": "", "categories": "",
             "title": "Coinbase lists Solana-based token BONK for spot trading"}
     r = a.analyze(item)
     if r is None:
-        raise RuntimeError(a.last_fatal_error or "analiz yanıtı alınamadı")
+        raise RuntimeError(f"analiz yanıtı alınamadı\n   Son hata: {a.health['last_err'] or a.last_fatal_error or '-'}"
+                           f"\n   {a.hint()}")
     print(f"   Analiz: puan {r['puan']:.0f}/10 ({r['puan_notu']})")
     if config.REVIEW_ENABLED:
         rv = a.review(item, r, {"coin_ch24": 2.0, "coin_volume": 3e8, "late_move": 0.3}, "📈 Boğa (test)")
@@ -31,6 +35,26 @@ def gemini():
         else:
             print(f"   İkinci görüş [{rv['model']}]: {'ONAY' if rv['onay'] else 'RED'} (güven {rv['guven']:.0f})")
     return f"tahmini maliyet ${a.stats['cost_usd']:.4f}"
+
+
+def price_sources():
+    from binance_api import Binance
+    from prices import VENUE_NAMES, PriceSources
+    ps = PriceSources(Binance("", "", testnet=config.TEST_MODE))
+    ok = 0
+    for venue, coin in (("binance", "BTC"), ("gateio", "GT"), ("mexc", "MX")):
+        name = VENUE_NAMES[venue]
+        try:
+            q = ps.quote(venue, coin)
+            if not q:
+                raise RuntimeError(f"{coin} fiyatı dönmedi")
+            kl = ps.klines(venue, coin, time.time() - 900, 5)
+            print(f"   ✅ {name}: {coin} {q['last']:.6g} (alış {q['bid']:.6g} / satış {q['ask']:.6g}, "
+                  f"24s hacim {q['vol24'] / 1e6:,.1f} M$) | mum verisi: {len(kl)} mum")
+            ok += 1
+        except Exception as e:
+            print(f"   ❌ {name}: {e} -> bu kaynak atlanır, diğerleri denenir")
+    return f"{ok}/3 kaynak çalışıyor (sanal işlemler ve Binance'te olmayan coinlerin ölçümü için)"
 
 
 def binance():
@@ -145,6 +169,7 @@ if __name__ == "__main__":
     step("Binance", binance)
     step("BTC rejimi", regime)
     step("RSS", rss)
+    step("Sanal işlem fiyat kaynakları", price_sources)
     step("Hacim tarayıcı", scanner)
     step("Listeleme duyuruları", announcements)
     step("Telegram kanalları", telegram_channels)

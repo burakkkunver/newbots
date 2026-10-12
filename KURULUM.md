@@ -147,8 +147,10 @@ Beklenen çıktı:
 ✅ Binance: TESTNET | USDT: 10000.00 | ... | stop emri türü: ... | OCO: var
 ✅ BTC rejimi: 📈 Boğa (BTC 24s +2.1%, ...) -> alım için en az 7 puan, ...
 ✅ RSS: 10/10 kaynak çalışıyor
+✅ Sanal işlem fiyat kaynakları: 3/3 kaynak çalışıyor
 ```
 
+Gemini satırı ❌ verirse altında **son hata** ve ne yapman gerektiği yazar (kredi bitti, anahtar geçersiz, kota...).
 Bir satır ❌ verirse aşağıdaki **Sorun Giderme** bölümüne bak. 1-2 RSS kaynağının ❌ olması sorun değil.
 
 ---
@@ -187,6 +189,7 @@ screen -r haberbot
 | `/durum` | Bakiye, açık pozisyonlar (stop/izleyen stop seviyesi, kalan süre), BTC rejimi |
 | `/rejim` | BTC rejimi ve şu an geçerli alım kuralları |
 | `/nabiz` | Piyasa Nabzı: sıcak anlatılar, izleme listesi (şimdi hazırlar) |
+| `/sanal` | Sanal işlemler: testnette olmayan coinler ve testnet işlemlerinin gerçek fiyat aynası (9.4) |
 | `/kalibrasyon` | Son 7 günde haberlerden sonra fiyat gerçekte ne yaptı (puan gruplarına göre) |
 | `/rapor` | Gün sonu raporunu hemen hazırlar (normalde her gün 23:00'te otomatik gelir) |
 | `/dosyalar` | Veri dosyalarını (CSV) ve son raporu Telegram'a dosya olarak gönderir |
@@ -201,6 +204,8 @@ screen -r haberbot
 | Log'un son 50 satırı | `tail -n 50 ~/newbots/data/bot.log` |
 | Canlı log | `tail -f ~/newbots/data/bot.log` (çıkış: Ctrl + C) |
 | Kapanan işlemler | `cat ~/newbots/data/trades.csv` |
+| Sanal işlemler | `cat ~/newbots/data/sanal_islemler.csv` |
+| Gemini hataları | `grep -E "GEMINI|Gemini .*(hata|kota)|bağlantı hatası" ~/newbots/data/bot.log \| tail -20` |
 | Tüm sinyaller | `cat ~/newbots/data/signals.csv` |
 | Açık pozisyonlar | `cat ~/newbots/data/positions.json` |
 
@@ -298,7 +303,7 @@ python3 tg_login.py
 
 ## 9.3 Piyasa Nabzı ve testnet öğrenme modu
 
-**Piyasa Nabzı** saatte bir piyasanın genel resmini toplar ve Gemini'ye yorumlatır:
+**Piyasa Nabzı** 2 saatte bir piyasanın genel resmini toplar ve Gemini'ye yorumlatır:
 - CoinGecko trend coinleri ve sektörleri
 - Korku & Açgözlülük endeksi
 - Binance'te en çok yükselenler
@@ -312,7 +317,7 @@ Sonuç bir **izleme listesi**:
 
 Kısa özet 4 saatte bir Telegram'a gelir. İstediğin an `/nabiz` yazabilirsin.
 
-**Hacim patlamaları** artık Gemini'ye soruluyor: "Arkasında gerçek bir hikâye var mı?" Gemini'ye o coinin son 24 saatlik haberleri (Telegram dahil), trend bilgisi ve nabız yorumu gidiyor. Sadece onaylananlar Telegram'a gelir ve alım adayı olur.
+**Hacim patlamaları** Gemini'ye soruluyor: "Arkasında gerçek bir hikâye var mı?" Gemini'ye o coinin son 24 saatlik haberleri (Telegram dahil), trend bilgisi ve nabız yorumu gidiyor. Sadece onaylananlar Telegram'a gelir ve alım adayı olur. Hiç haberi olmayan, trendde ve izleme listesinde de olmayan patlamalar Gemini'ye sorulmaz (veride Gemini bunların neredeyse hepsini zaten reddetti; boşa maliyet).
 
 **Testnet öğrenme modu** (testnette varsayılan açık): Para sahte olduğu için bot daha rahat alım yapar, böylece işlem örnekleri birikir:
 - rejim eşikleri 1 puan düşük (en az 7)
@@ -328,7 +333,84 @@ Kapatmak için `env.sh`'e `export TESTNET_OGRENME="False"` ekle. Gerçek hesapta
 
 Kapatmak için: `export LISTING_FAST_PATH="False"` / `export SPIKE_SKIP_REVIEW="False"`.
 
-**Gerçek piyasa K/Z'si:** Testnet fiyatları büyük coinlerde gerçek piyasayı takip ediyor, ama küçük coinlerin ani hareketlerinde farklı gidebilir. Bu yüzden her işlemde giriş ve çıkış anındaki gerçek Binance fiyatı da kaydedilir. Kapanış mesajında ve gece raporunda "Gerçek piyasada: +X%" satırı olarak, `trades.csv`'de `gercek_*` sütunları olarak görünür. Stratejinin gerçek performansını bu sütunlar gösterir.
+**Gerçek piyasa K/Z'si:** Testnet fiyatları büyük coinlerde gerçek piyasayı takip ediyor, ama küçük coinlerin ani hareketlerinde farklı gidebilir. Bu yüzden her işlemde giriş ve çıkış anındaki gerçek Binance fiyatı da kaydedilir. Kapanış mesajında ve gece raporunda "Gerçek piyasada: +X%" satırı olarak, `trades.csv`'de `gercek_*` sütunları olarak görünür.
+
+---
+
+## 9.4 Sanal işlemler: gerçek fiyatla "almış gibi yap"
+
+Sinyal gelen coin Binance testnette yoksa bot artık sinyali atmıyor:
+- Coini **almış gibi yapar**, gerçek fiyatını takip eder ve testnetle **aynı kurallarla** satar (-%2 stop, izleyen stop / sabit kâr al, time-stop, süre).
+- Gerçek fiyat şu sırayla aranır: **Binance gerçek piyasa → Gate.io → MEXC**. Hepsi anahtarsız, herkese açık fiyat servisleri.
+- Para harcanmaz. Ayrı bir **sanal bütçe** (100 USDT) kullanılır, testnet bütçesine dokunulmaz.
+- Telegram mesajları 🧪 ile başlar.
+
+Örnek: Upbit, Binance'te olmayan bir coini listeledi → Gate.io fiyatıyla sanal alım → izleyen stopla sanal satış → sonuç `data/sanal_islemler.csv` dosyasına yazılır.
+
+**Ayna (🪞):** Her testnet alımının bir kopyası da gerçek Binance fiyatlarıyla takip edilir. Testnette küçük coinlerin fiyatı gerçek piyasadan çok farklı gidebiliyor. Örnek: RSR testnette -%0,25 ile kapandı, aynı anda gerçek piyasada +%35'teydi. Stratejinin gerçek sonucunu ayna gösterir; gece raporu testnet ve ayna sonuçlarını yan yana yazar.
+
+**Gerçekçilik için:**
+- Alım satış fiyatından (ask), satış alış fiyatından (bid) yapılır.
+- Her yönde %0,1 komisyon düşülür.
+- Fiyat 20 sn'de bir kontrol edilir. Bu yüzden hızlı düşüşte çıkış, borsadaki gerçek bir stop emrinden biraz daha kötü yazılabilir; sonuçlar temkinli tarafta kalır.
+- 24 saatlik hacmi 100 bin $'ın altındaki coinler sanal alınmaz (fiyatı güvenilir değil).
+
+**Nereden takip edilir:**
+- `/sanal`: açık sanal pozisyonlar, bugünkü ve son 7 günün sonuçları, fiyat kaynaklarının durumu
+- `/durum`: sanal bütçe ve açık pozisyonlar
+- Gece raporu: "Sanal işlemler" bölümü
+- `/dosyalar`: `sanal_islemler.csv` dosyası da gelir
+- `python3 analiz.py`: sanal işlemler tablosu
+
+Kalibrasyon da artık Binance'te olmayan coinleri Gate.io / MEXC mumlarıyla ölçüyor. `calibration.csv`'nin sembol sütununda `XYZUSDT@gateio` gibi görünür.
+
+**Ayarlar** (`env.sh`, hepsi isteğe bağlı):
+
+| Ayar | Varsayılan | Ne yapar |
+|---|---|---|
+| `PAPER_ENABLED` | True | Sanal işlemleri açar / kapatır |
+| `PAPER_MIRROR` | True | Testnet alımlarının gerçek fiyat aynası |
+| `PAPER_BUDGET_USDT` | 100 | Sanal bütçe |
+| `PAPER_MAX_OPEN` | 5 | En fazla açık sanal pozisyon |
+| `PAPER_CHECK_SECONDS` | 20 | Fiyat kontrol sıklığı (sn) |
+| `PAPER_FEE_PCT` | 0.1 | Her yöndeki komisyon (%) |
+| `PAPER_MIN_VOL_USDT` | 100000 | En düşük 24 saatlik hacim ($) |
+| `PAPER_VENUES` | binance,gateio,mexc | Fiyat kaynakları ve sırası |
+
+`check.py`'nin "Sanal işlem fiyat kaynakları" satırı üç kaynağın sunucundan erişilebilir olduğunu gösterir. İleride Gate.io API anahtarı eklersek bu sanal işlemler gerçek emirlere dönüşebilir; altyapı hazır.
+
+---
+
+## 9.5 Gemini maliyeti ve "Gemini çalışmıyor" uyarısı
+
+**Neden önemli:** Gemini 7 Ekim 12:40'tan beri hiç yanıt vermedi. O tarihten beri haber analizi, hacim yorumu ve nabız tamamen durdu, sadece listeleme hızlı yolu çalıştı. Eski sürüm bu durumu Telegram'a bildirmiyordu. Haberler de kayda geçmeden atlanıyordu, raporda "14 haberin 14'ü filtrelendi" görünmesinin sebebi buydu.
+
+**Artık:**
+- Gemini art arda 5 kez yanıt vermezse Telegram'a **gerçek hata mesajı ve ne yapman gerektiğiyle** birlikte uyarı gelir. Anahtar veya kredi hatası gibi kalıcı sorunlarda uyarı ilk hatada gelir.
+- Gemini düzelince "✅ Gemini tekrar çalışıyor" mesajı gelir.
+- Art arda 6 hatada bot Gemini'ye 5 dk mola verir; döngü boşuna beklemez.
+- `/durum` ve gece raporunda Gemini durumu (son başarılı yanıt veya son hata) ve harcama yazar.
+- Gemini'nin analiz edemediği haberler `AI_YOK` koduyla kaydedilir.
+- Model listesi 6 saatte bir kendiliğinden yenilenir.
+
+**Maliyet kontrolü:**
+
+| İş | Model | Sıklık |
+|---|---|---|
+| Haber olguları | flash-lite (en ucuz) | her haber |
+| Hacim patlaması yorumu | flash | sadece son 24 saatte haberi olan, trend veya izleme listesindeki coinler, saatte en fazla 12 |
+| Piyasa Nabzı | flash (eskiden pro) | 2 saatte bir (eskiden saatte bir) |
+| İkinci görüş | pro | sadece tüm kontrolleri geçen haber adayları |
+| Gece raporu | flash | günde 1 |
+
+**Günlük bütçe:** `GEMINI_GUNLUK_BUTCE_USD` (varsayılan 0,15 $ ≈ 200 TL/ay). Tahmini harcama:
+- bütçenin %70'ine gelince Piyasa Nabzı,
+- %100'üne gelince hacim yorumu gece yarısına kadar durur.
+- Haber analizi, ikinci görüş ve gece raporu devam eder.
+
+Harcama diske yazılır, botu yeniden başlatmak bütçeyi sıfırlamaz. Rapordaki "Dağılım" satırı paranın hangi işe gittiğini gösterir. TL karşılığı `USD_TRY` (varsayılan 45) ile hesaplanır.
+
+**Kredini kontrol et:** aistudio.google.com → **Billing** (Faturalandırma) sayfası: kalan kredi ve projenin ücretli katmanda olup olmadığı. Kullanım: aistudio.google.com/usage. Bot "tahmini" harcamayı kendi hesaplar; kesin rakam AI Studio'dadır.
 
 ---
 
@@ -361,12 +443,14 @@ source venv/bin/activate && pip install -r requirements.txt
 | `Eksik ortam değişkenleri` | `source env.sh` yapmadın veya env.sh'de bir tırnak boş. |
 | `ModuleNotFoundError: google` | `source venv/bin/activate` yapmadın. `start.sh` bunu otomatik yapar. |
 | Gemini **503 UNAVAILABLE** | Google tarafında anlık yoğunluk; senin hesabınla ilgili değil. Bot 2-4 sn bekleyip tekrar dener, olmazsa yedek modele geçer ve yoğun modeli 10 dk dinlendirir. Haber kaybolmaz, sonraki turda tekrar denenir. |
-| Gemini **429 RESOURCE_EXHAUSTED** | Anahtar faturalandırma açık olmayan projeden alınmış. AI Studio → API Keys → anahtarın projesinin yanında *Paid/Tier 1* yazmalı. Yazmıyorsa o projede yeni anahtar oluştur. |
+| Gemini **429 RESOURCE_EXHAUSTED** | Kota ya da kredi bitti. "prepayment credits are depleted" veya "free_tier" yazıyorsa ücretli katman kredisi bitmiştir: AI Studio → Billing'den kredi yükle. Dakikalık sınırsa ("PerMinute") kendiliğinden düzelir. |
+| Telegram'a **"⚠️ Gemini çalışmıyor"** geldi | Mesajdaki "Son hata" ve altındaki ipucunu uygula. Sunucuda `python3 check.py` aynı hatayı gösterir. Bot bu sürede çalışmaya devam eder. |
 | Gemini **Model bulunamadı (404)** | Google eski modeli kaldırmış. Bot, anahtarının erişebildiği en yeni flash modellerini otomatik seçer; `check.py` erişilebilir modelleri listeler. Belirli bir model istersen: `export GEMINI_MODELS="model-adi"` |
 | Gemini **400 / 403 API key not valid** | Anahtar yanlış kopyalanmış veya silinmiş. Yeni anahtar oluştur. |
 | Binance **-2015 Invalid API-key** | Testnet yerine gerçek hesap anahtarı girilmiş (veya tersi). `TEST_MODE` ile anahtar türü uyumlu olmalı. |
 | Binance **-1021 Timestamp** | Sunucu saati kayık. `sudo timedatectl set-ntp true` |
-| `XYZUSDT testnet üzerinde işlem görmüyor` | Testnette sadece belli coinler var. Normal; bot o haberi atlar ve Telegram'a yazar. |
+| `XYZUSDT testnet üzerinde işlem görmüyor` | Testnette sadece belli coinler var. Bot bu coinleri artık sanal işlemle (gerçek fiyatla) dener, bkz. 9.4. |
+| Sanal işlem: "fiyatı da bulunamadı" | Coin Binance, Gate.io ve MEXC'nin hiçbirinde USDT çiftiyle işlem görmüyor. `check.py`'de fiyat kaynakları satırına bak. |
 | Telegram kanalları: "giriş yapılmamış" | Botu durdur, `python3 tg_login.py` çalıştır (9.2. adım 3). |
 | Telegram kanalları: "telethon kurulu değil" | `pip install --upgrade pip setuptools wheel && pip install -r requirements.txt` |
 | `database is locked` (tg_news.session) | Bot çalışırken `tg_login.py`/`check.py` çalıştırılmış. Önce botu durdur. |
@@ -378,10 +462,7 @@ source venv/bin/activate && pip install -r requirements.txt
 
 ## 💰 Maliyet notu
 
-- Haber analizi (flash/flash-lite, düşünme en düşükte): haber başına ~0,0002-0,0005 $. Kural filtresine takılan haberler Gemini'ye hiç gitmez.
-- İkinci görüş (pro model): sadece tüm kontrolleri geçen adaylarda, günde birkaç kez. Çağrı başına ~0,01 $.
-- Gece raporu: günde 1 çağrı, ~0,02-0,05 $.
-- Piyasa Nabzı: saatte 1 çağrı, günde ~0,02-0,05 $. Hacim patlaması yorumu: saatte en fazla 30 ucuz çağrı, günde ~0,02 $.
-- Telegram kanalları Gemini'ye günde birkaç yüz haber daha gönderir: ucuz modelle günde ~0,05-0,10 $.
-- Toplam: ayda yaklaşık **2-5 $**. Güncel tahmini maliyet her 20 dakikalık özette ve gece raporunda yazar.
-Bütçe aşılırsa `env.sh`'e sadece lite modeli yazarak (ör. `export GEMINI_MODELS="gemini-3.5-flash-lite"`) ekleyerek maliyeti ~5 kat düşürebilirsin.
+- Önceki sürümde Piyasa Nabzı saatte bir pahalı **pro** modelle çalışıyordu. Hacim patlamalarının hepsi (günde ~300) ve haber analizleri de **flash** modelle yapılıyordu. Kaba tahminle günde ~1 $ (~45 TL) ediyordu; 250 TL'lik kredinin birkaç günde bitmesi bununla uyumlu. Eski nottaki "ayda 2-5 $" tahmini yanlıştı.
+- Yeni düzen (9.5): haberler flash-lite ile, nabız 2 saatte bir flash ile, hacim yorumu sadece kanıtı olan patlamalarda. Üstüne **günlük bütçe sınırı** var (0,15 $ ≈ 200 TL/ay).
+- Gerçek harcama her 20 dakikalık özette, `/durum`'da ve gece raporunda amaca göre dağılımıyla yazar. Birkaç gün sonra bu rakamlara bakıp bütçeyi birlikte ayarlarız.
+- Daha da düşürmek için: `export PULSE_ENABLED="False"` (nabız kapalı) veya `export SPIKE_AI_MAX_PER_HOUR="6"`.

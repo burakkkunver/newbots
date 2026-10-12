@@ -22,7 +22,7 @@ HEADERS = {
 }
 # Parantez içinde geçip coin olmayan kelimeler (piyasa adları vb.)
 NOT_COINS = {"KRW", "USDT", "USDC", "BTC", "ETH", "USD", "EUR", "TRY", "FDUSD", "BNB", "SPOT", "MARGIN",
-             "FUTURES", "PERP", "UTC", "KST", "AM", "PM", "API", "NEW", "TRADE"}
+             "FUTURES", "PERP", "UTC", "KST", "AM", "PM", "API", "NEW", "TRADE", "MARKET", "MARKETS", "PAIR", "PAIRS"}
 
 
 def tickers_in(title):

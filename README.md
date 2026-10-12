@@ -34,27 +34,34 @@ Kurulum için: **[KURULUM.md](KURULUM.md)**
    - Her pozisyonda borsaya **-%2 zarar kes** emri girilir (bot kapalıyken de çalışır).
    - İzleyen stopu bot 10 sn'de bir kontrol eder ve borsadaki stop emrini yukarı taşır.
    - Süre dolunca pozisyon kapatılır; izleyen stop aktifse kâr korunarak devam edilir.
-7. **Alternatif sinyaller (şimdilik sadece bildirim + kayıt):**
+7. **Alternatif sinyaller:**
    - **Hacim tarayıcı:** Dakikada bir tüm Binance USDT çiftleri tek istekle taranır. 15 dk'da +%2'den fazla yükselen
      ve hacmi önceki saatin 3 katına çıkan coinler işaretlenir; son 6 saatte o coinle ilgili haber varsa Telegram'a bildirilir.
    - **Listeleme duyuruları:** Upbit ve Binance duyuruları dakikada bir, Coinbase'in yeni çiftleri 5 dakikada bir kontrol edilir.
-   - `ALT_SIGNALS_TRADE=True` yapılınca bu sinyaller 8 puanlı haber gibi alım sürecine girer (rejim eşiği + ikinci görüş).
+   - Testnet öğrenme modunda bu sinyallerle alım açık (`ALT_SIGNALS_TRADE`).
 8. **Telegram haber kanalları (isteğe bağlı):** Watcher.Guru, Tree News, BWEnews, Wu Blockchain ve Binance duyuruları
    senin hesabınla okunur (sadece bu kanallar); haberler RSS ile aynı yoldan geçer ama dakikalar önce gelir.
-9. **Piyasa Nabzı:** Saatte bir CoinGecko trendleri/sektörleri, Korku&Açgözlülük, Binance yükselenleri, hacim patlamaları ve
-   haber yoğunluğu Gemini'ye yorumlatılır; izleme listesindeki coinlerin haberleri +1 puan alır. Hacim patlamaları da
-   Gemini'ye "gerçek hikâye var mı?" diye sorulur.
+9. **Piyasa Nabzı:** 2 saatte bir CoinGecko trendleri/sektörleri, Korku&Açgözlülük, Binance yükselenleri, hacim patlamaları ve
+   haber yoğunluğu Gemini'ye yorumlatılır; izleme listesindeki coinlerin haberleri +1 puan alır. Haberi veya trendi olan
+   hacim patlamaları Gemini'ye "gerçek hikâye var mı?" diye sorulur.
 10. **Testnet öğrenme modu:** Testnette eşikler gevşek (işlem örnekleri birikmesi için); gerçek hesapta devre dışı.
     **Hızlı yol:** Listelemeler (Upbit/Coinbase/9-10 puanlı resmi listeleme haberi) ve Gemini onaylı hacim patlamaları
     ikinci görüş beklemeden alınır; listelemelerde "tren kaçtı" sınırı %30. Her işlemde gerçek piyasa K/Z'si de kaydedilir.
-11. **Kalibrasyon:** Analiz edilen her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı ölçülür (`data/calibration.csv`).
-12. **Telegram:** sinyaller, işlemler, rejim değişimleri, 20 dk'da bir özet, her gün 23:00'te detaylı rapor + yapay zeka yorumu.
-   Komutlar: `/durum`, `/rejim`, `/nabiz`, `/kalibrasyon`, `/rapor`, `/dosyalar`, `/yardim`.
+11. **Sanal işlemler:** Coin testnette yoksa bot onu almış gibi yapar, gerçek fiyatını (Binance gerçek piyasa → Gate.io → MEXC)
+    takip eder ve aynı kurallarla satar. Her testnet alımının da gerçek Binance fiyatıyla bir "aynası" tutulur
+    (testnet fiyatları küçük coinlerde gerçek piyasadan çok sapabiliyor). Ayrıntı: KURULUM.md 9.4.
+12. **Gemini sağlığı ve bütçesi:** Gemini art arda hata verirse Telegram'a sebebiyle uyarı gelir; haberler ucuz lite modelle,
+    pro model sadece ikinci görüşte. Günlük bütçe sınırı (varsayılan 0,15 $ ≈ 200 TL/ay). Ayrıntı: KURULUM.md 9.5.
+13. **Kalibrasyon:** Analiz edilen her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı ölçülür (`data/calibration.csv`).
+14. **Telegram:** sinyaller, işlemler, rejim değişimleri, 20 dk'da bir özet, her gün 23:00'te detaylı rapor + yapay zeka yorumu.
+   Komutlar: `/durum`, `/rejim`, `/nabiz`, `/sanal`, `/kalibrasyon`, `/rapor`, `/dosyalar`, `/yardim`.
 
 ## Dosyalar
 - `bot.py` ana döngü · `news.py` RSS · `filters.py` kural filtresi · `ai.py` Gemini · `market.py` BTC rejimi
 - `scanner.py` hacim tarayıcı · `announcements.py` Upbit/Coinbase/Binance listeleme duyuruları
 - `pulse.py` Piyasa Nabzı · `tgnews.py` Telegram kanal okuyucu · `tg_login.py` Telegram tek seferlik giriş
 - `trader.py` alım/çıkış/pozisyon takibi · `binance_api.py` Binance REST · `calibration.py` ölçüm · `report.py` gece raporu
+- `paper.py` sanal işlemler (testnette olmayan coinler + gerçek fiyat aynası) · `prices.py` Binance/Gate.io/MEXC gerçek fiyatları
 - `config.py` tüm ayarlar · `check.py` kurulum testi · `analiz.py` kalibrasyon analizi · `start.sh` başlatıcı
-- `data/` → `signals.csv`, `calibration.csv`, `trades.csv`, `positions.json`, `reports/`, `bot.log` (otomatik oluşur)
+- `data/` → `signals.csv`, `calibration.csv`, `trades.csv`, `sanal_islemler.csv`, `positions.json`, `paper.json`,
+  `gemini_harcama.json`, `reports/`, `bot.log` (otomatik oluşur)

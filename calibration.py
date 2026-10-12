@@ -6,7 +6,8 @@ mumlardan şunlar hesaplanıp data/calibration.csv dosyasına yazılır:
   - 15 dk / 1 saat / 4 saat sonraki getiri (%)
   - ilk 1 saat ve 4 saatteki en yüksek / en düşük nokta (%)  -> hedef ve stop ayarı için
   - aynı sürede BTC'nin getirisi ve farkı (coin - BTC)       -> haberin piyasadan bağımsız etkisi
-Genel piyasa haberleri ("GENEL") BTC üzerinden ölçülür.
+Genel piyasa haberleri ("GENEL") BTC üzerinden ölçülür. Coin gerçek Binance'te yoksa Gate.io / MEXC fiyatıyla
+ölçülür (sembol sütununda "XYZUSDT@gateio" gibi yazılır).
 """
 import json
 import os
@@ -31,8 +32,9 @@ def _num(v):
 
 
 class Calibrator:
-    def __init__(self, bx):
+    def __init__(self, bx, prices=None):
         self.bx = bx
+        self.prices = prices
         try:
             with open(PENDING_FILE) as f:
                 self.pending = json.load(f)
@@ -46,13 +48,21 @@ class Calibrator:
         os.replace(tmp, PENDING_FILE)
 
     def add(self, item, res, code, regime_name, review_txt=""):
-        """Haberi ölçüm listesine ekler. Coin gerçek Binance'te yoksa ölçülemez (False)."""
+        """Haberi ölçüm listesine ekler. Coin hiçbir kaynakta (Binance, Gate.io, MEXC) yoksa ölçülemez (False)."""
         coin = res.get("hedef_coin") or "GENEL"
         symbol = "BTCUSDT" if coin == "GENEL" or coin in STABLES else f"{coin}USDT"
         try:
             base = self.bx.real_price(symbol)
         except Exception:
-            return False
+            q = None
+            if self.prices and symbol != "BTCUSDT":
+                try:
+                    q = self.prices.find(coin, [v for v in config.PAPER_VENUES if v != "binance"])
+                except Exception:
+                    q = None
+            if not q:
+                return False
+            base, symbol = q["last"], f"{symbol}@{q['venue']}"
         self.pending.append({
             "ts": time.time(), "published": item["published"], "source": item["source"], "coin": coin,
             "symbol": symbol, "puan": res.get("puan"), "karar": res.get("karar", ""),
@@ -95,10 +105,18 @@ class Calibrator:
         return (pct(float(w[-1][4]), base), pct(max(float(k[2]) for k in w), base),
                 pct(min(float(k[3]) for k in w), base))
 
+    def _klines(self, symbol, start, limit):
+        if "@" in symbol:   # Binance'te olmayan coin: Gate.io / MEXC mumları
+            sym, venue = symbol.split("@", 1)
+            if not self.prices:
+                raise RuntimeError(f"{venue} fiyat kaynağı yok")
+            return self.prices.klines(venue, sym[:-4], start, limit)
+        return self.bx.real_klines(symbol, "1m", start_ts=start, limit=limit)
+
     def _measure(self, rec):
         start = min(rec["published"], rec["ts"])
         need = int((rec["ts"] - start) / 60) + HORIZON_MIN + 3
-        kl = self.bx.real_klines(rec["symbol"], "1m", start_ts=start, limit=min(1000, need))
+        kl = self._klines(rec["symbol"], start, min(1000, need))
         if not kl:
             return None
         sig_minute_ms = int(rec["ts"] // 60 * 60 * 1000)
@@ -166,7 +184,8 @@ def score_bucket(row):
 
 ALT_NAMES = {"hacim_haberli": "Hacim patlaması + haber", "hacim_patlamasi": "Hacim patlaması (habersiz)",
              "hacim_habersiz": "Hacim patlaması (habersiz)", "hacim_ai_onay": "Hacim + Gemini onayı",
-             "hacim_ai_red": "Hacim, Gemini reddetti", "hacim_ai_yok": "Hacim, Gemini yanıt vermedi"}
+             "hacim_ai_red": "Hacim, Gemini reddetti", "hacim_ai_yok": "Hacim, Gemini yanıt vermedi",
+             "hacim_butce": "Hacim, Gemini bütçesi doldu", "hacim_sinir": "Hacim, saatlik Gemini sınırı"}
 
 
 def alt_group(row):

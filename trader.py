@@ -137,6 +137,17 @@ class Trader:
         return amount, ""
 
     # ---------- alım ----------
+    def listed(self, coin):
+        """Coin işlem yapılan borsada (testnette) var mı? Liste hiç alınamadıysa True (karar precheck'e kalsın)."""
+        coin = (coin or "").upper()
+        if coin in STABLES:
+            return True
+        try:
+            self.bx.load_symbols()
+        except Exception as e:
+            print(f"⚠️ Sembol listesi yenilenemedi: {e}")
+        return not self.bx.symbols or f"{coin}USDT" in self.bx.symbols
+
     def precheck(self, coin, score, item, regime, late_limit=None):
         """Alım yapılabilir mi? (ok, kod, açıklama, ctx). Ucuz kontroller ikinci görüşten ÖNCE yapılır."""
         coin = (coin or "").upper()
@@ -514,7 +525,7 @@ class Trader:
             self.state["realized_pnl"] += pnl
             self.state["cooldown"][pos["symbol"]] = time.time() + config.COIN_COOLDOWN_MIN * 60
             self.state["closed"].append({
-                "symbol": pos["symbol"], "score": pos["score"], "regime": pos.get("regime", "?"),
+                "id": pos["id"], "symbol": pos["symbol"], "score": pos["score"], "regime": pos.get("regime", "?"),
                 "mode": pos["mode"], "pnl": pnl, "pct": pnl_pct, "peak_pct": peak_pct, "reason": reason,
                 "opened_at": pos["opened_at"], "closed_at": time.time(), "minutes": minutes,
                 "title": pos["title"][:120], "event": pos.get("event", ""), "real_pct": real_pct})
@@ -561,7 +572,7 @@ class Trader:
             lines.append(f"• {p['symbol']} {pct(price, p['entry']):+.2f}% | {value:.2f}$ | {guard} | {left_txt}")
         return lines, open_value
 
-    def summary_text(self, regime_text, ai_stats=None, news_stats=None):
+    def summary_text(self, regime_text, ai_stats=None, news_stats=None, ai_text=None, paper_lines=None):
         lines = [f"📊 <b>Durum Özeti</b>{' (TESTNET)' if config.TEST_MODE else ''} — {now_local().strftime('%H:%M')}",
                  f"<b>BTC rejimi:</b> {esc(regime_text)}"]
         try:
@@ -580,9 +591,14 @@ class Trader:
             lines.append(f"<b>Bugün:</b> {len(today)} işlem, {wins} kârlı, {sum(c['pnl'] for c in today):+.2f} USDT")
         lines.append(f"\n<b>Açık pozisyonlar ({len(pos_lines)}):</b>")
         lines.extend(pos_lines or ["• yok"])
+        if paper_lines:
+            lines.append("\n🧪 <b>Sanal işlemler</b> (gerçek fiyatla)")
+            lines.extend(paper_lines)
         if news_stats:
             lines.append(f"\n<b>Haber:</b> {news_stats}")
-        if ai_stats:
+        if ai_text:
+            lines.append(f"<b>Gemini:</b> {ai_text}")
+        elif ai_stats:
             lines.append(f"<b>Gemini:</b> {ai_stats['calls']} çağrı, {ai_stats['errors']} hata, "
                          f"{ai_stats['fallbacks']} yedek model | tahmini maliyet ${ai_stats['cost_usd']:.3f}")
         return "\n".join(lines)

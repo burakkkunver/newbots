@@ -144,6 +144,11 @@ class MarketPulse:
     def run(self):
         """Veriyi toplar, Gemini'ye yorumlatır. Başarılıysa True."""
         self.last_run = time.time()
+        ok, why = self.ai.allowed("nabiz")
+        if not ok:   # günlük Gemini bütçesi doldu ya da Gemini molada: veri toplamaya da gerek yok
+            self.status["Gemini"] = f"atlandı ({why})"
+            print(f"🧭 Nabız atlandı: {why}")
+            return False
         print("🧭 Piyasa Nabzı hazırlanıyor...")
         d, text = self.collect()
         res = self.ai.pulse_analysis(text)

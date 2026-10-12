@@ -1,13 +1,15 @@
 """Kalibrasyon ve işlem analizi. Sunucuda:  python3 analiz.py        (tüm veriler)
                                             python3 analiz.py 7      (son 7 gün)
 
-data/calibration.csv : her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı
-data/trades.csv      : açılıp kapanan işlemler
+data/calibration.csv     : her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı
+data/trades.csv          : açılıp kapanan testnet işlemleri
+data/sanal_islemler.csv  : sanal işlemler (testnette olmayan coinler + testnet işlemlerinin gerçek fiyat aynası)
 """
 import sys
 import time
 
 from calibration import BUCKETS, alt_group, f, group_stats, load_rows, score_bucket
+from paper import PAPER_CSV
 from trader import TRADES_CSV
 from util import ALT_SOURCES, parse_ts, read_csv
 
@@ -26,6 +28,42 @@ def table(title, stats):
         print(f"{str(s['grup'])[:30]:<31}{s['n']:>5} {p(s['r15']):>7}{p(s['r1']):>7}{p(s['r4']):>7}"
               f"{p(s['max1']):>7}{p(s['max4']):>7}{p(s['hit2'], False):>11}{p(s['stop2'], False):>10}"
               f"{p(s['fark1']):>10}")
+
+
+def groups(trades, key, name, pct_key="kar_yuzde"):
+    out = {}
+    for t in trades:
+        out.setdefault(t.get(key) or "?", []).append(t)
+    print(f"\n{name}:")
+    for k, ts in sorted(out.items(), key=lambda kv: -len(kv[1])):
+        vals = [float(t[pct_key]) for t in ts]
+        print(f"  {k[:30]:<31} n={len(ts):<3} ort {sum(vals) / len(vals):+.2f}% | "
+              f"kazanan %{100 * sum(1 for v in vals if v > 0) / len(vals):.0f}")
+
+
+def paper_report(since):
+    paper = read_csv(PAPER_CSV)
+    if since:
+        paper = [t for t in paper if parse_ts(t["acilis"]) >= since]
+    print(f"\n=== SANAL İŞLEMLER ({len(paper)}) — gerçek fiyatla, komisyon dahil ===")
+    for kind, name in (("sanal", "Testnette olmayan coinler"), ("ayna", "Ayna (testnet işlemlerinin gerçek fiyatla kopyası)")):
+        ks = [t for t in paper if t.get("tur") == kind]
+        if not ks:
+            continue
+        vals = [float(t["kar_yuzde"]) for t in ks]
+        print(f"\n{name}: {len(ks)} işlem | ortalama {sum(vals) / len(vals):+.2f}% | kazanan "
+              f"%{100 * sum(1 for v in vals if v > 0) / len(vals):.0f} | toplam "
+              f"{sum(float(t['kar_usdt']) for t in ks):+.2f} USDT")
+        tn = [float(t["testnet_kar_yuzde"]) for t in ks if t.get("testnet_kar_yuzde")]
+        if tn:
+            print(f"  aynı işlemler testnette: ortalama {sum(tn) / len(tn):+.2f}% ({len(tn)} işlem)")
+        groups(ks, "cikis_sebebi", "  Çıkış sebebi")
+        if kind == "sanal":
+            groups(ks, "borsa", "  Fiyat kaynağı")
+        groups(ks, "puan", "  Puan")
+    for t in paper[-15:]:
+        print(f"{t['acilis'][5:16]} {t['tur']:<5} {t['coin']:<8} {t['borsa']:<8} {float(t['kar_yuzde']):+7.2f}% "
+              f"zirve {float(t['zirve_yuzde']):+6.1f}% | {t['cikis_sebebi'][:24]:<24} | {t['haber'][:50]}")
 
 
 def main():
@@ -48,7 +86,7 @@ def main():
                                                 lambda r: r["ikinci_gorus"].split()[0]))
 
         movers = sorted([r for r in rows if (f(r, "max4s") or 0) >= 2 and r.get("coin") != "GENEL"
-                         and r.get("durum_kodu") != "ALINDI"], key=lambda r: -f(r, "max4s"))[:10]
+                         and r.get("durum_kodu") not in ("ALINDI", "SANAL_ALINDI")], key=lambda r: -f(r, "max4s"))[:10]
         print("\n=== KAÇIRILAN EN BÜYÜK HAREKETLER (alınmayanlar, 4 saatteki zirve) ===")
         for r in movers:
             print(f"{r['sinyal_zamani'][5:16]} {r['coin']:<7} puan {r['puan']:>2} zirve {p(f(r, 'max4s'))} "
@@ -82,14 +120,8 @@ def main():
             print(f"Aynı işlemler gerçek piyasa fiyatlarıyla: ortalama {sum(real) / len(real):+.2f}% "
                   f"| kazanan %{100 * sum(1 for v in real if v > 0) / len(real):.0f} ({len(real)} işlem)")
         for key, name in (("cikis_sebebi", "Çıkış sebebi"), ("rejim", "Rejim"), ("puan", "Puan"), ("mod", "Mod")):
-            groups = {}
-            for t in trades:
-                groups.setdefault(t.get(key, "?"), []).append(t)
-            print(f"\n{name}:")
-            for k, ts in sorted(groups.items(), key=lambda kv: -len(kv[1])):
-                vals = [float(t["kar_yuzde"]) for t in ts]
-                print(f"  {k[:30]:<31} n={len(ts):<3} ort {sum(vals) / len(vals):+.2f}% | "
-                      f"kazanan %{100 * sum(1 for v in vals if v > 0) / len(vals):.0f}")
+            groups(trades, key, name)
+    paper_report(since)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,12 @@ puanı aşağıdaki sabit tablo hesaplıyor. Alım adayları ayrıca güçlü bi
 
 Model seçimi: 503/429 gelirse bekleyip tekrar dener, olmazsa yedek modele geçer; yoğun modeli
 10 dk dinlendirir, son başarılı modeli hep önce dener, kullanımdan kalkmış modeli listeden atar.
+Maliyet: haber olguları ucuz "lite" modelle, hacim/nabız/rapor "flash" ile, ikinci görüş "pro" ile yapılır.
+Günlük bütçe dolunca hacim yorumu ve nabız durur. Gemini art arda hata verirse Telegram'a sebebiyle uyarı gider.
 """
+import html
 import json
+import os
 import re
 import time
 
@@ -16,6 +20,7 @@ from google import genai
 from google.genai import errors, types
 
 import config
+from util import fmt_ts, today_str
 
 MODEL_COOLDOWN_SEC = 600
 _SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "robotics", "computer", "exp", "learnlm",
@@ -273,22 +278,75 @@ def _as_bool(v):
     return str(v).strip().lower() in ("true", "evet", "yes", "1", "onay")
 
 
+def _dur(seconds):
+    m = int(max(0, seconds) // 60)
+    if m < 60:
+        return f"{m} dk"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h} sa {m} dk"
+    d, h = divmod(h, 24)
+    return f"{d} gün {h} sa"
+
+
+def _esc(text):
+    return html.escape(str(text or ""), quote=False)
+
+
+def _err_text(e):
+    """API hatasının okunur özeti: kod, durum, mesaj ve varsa kota kimliği (teşhis için)."""
+    code = getattr(e, "code", "") or ""
+    status = getattr(e, "status", "") or ""
+    msg = (getattr(e, "message", None) or str(e)).replace("\n", " ")
+    quota = sorted(set(re.findall(r"quotaId['\"]?\s*:\s*['\"]([\w-]+)", str(e))))
+    return (f"{code} {status}: {msg}" + (f" [kota: {', '.join(quota)}]" if quota else "")).strip()[:500]
+
+
+# Hangi iş hangi model zinciriyle yapılır. Haber olguları basit bir sınıflandırma, ucuz "lite" model yeter;
+# en pahalı "pro" modeller sadece nadir ve önemli ikinci görüşte kullanılır.
+PURPOSE_CHAIN = {"haber": "cheap", "hacim": "main", "nabiz": "main", "rapor": "main", "ikinci_gorus": "review"}
+PURPOSE_NAMES = {"haber": "haber analizi", "hacim": "hacim yorumu", "nabiz": "piyasa nabzı",
+                 "ikinci_gorus": "ikinci görüş", "rapor": "gece raporu"}
+BUDGET_STOP = {"nabiz": 0.7, "hacim": 1.0}   # günlük bütçenin bu oranı harcanınca bu işler gece yarısına kadar durur
+FATAL_KINDS = ("anahtar", "fatura", "konum")
+MAX_MODELS_PER_CALL = 4
+ALERT_REPEAT_SEC = 6 * 3600
+REDISCOVER_SEC = 6 * 3600
+SPEND_FILE = os.path.join(config.DATA_DIR, "gemini_harcama.json")
+
+
 class GeminiAnalyzer:
     def __init__(self):
         self.client = genai.Client(api_key=config.GEMINI_API_KEY)
-        self.stats = {"calls": 0, "errors": 0, "cost_usd": 0.0, "fallbacks": 0}
+        self.stats = {"calls": 0, "errors": 0, "cost_usd": 0.0, "fallbacks": 0, "skipped": 0}
         self.day = dict(self.stats)
+        self.day_date = today_str()
         self.last_fatal_error = None
         self.no_thinking_cfg = set()
         self.dead = set()
         self.cooldown = {}
         self.last_good = {}
         self.available = []
-        self.chains = self._resolve_chains()
+        # Sağlık: art arda kaç çağrı başarısız, son hata ne, ne zamandan beri
+        self.health = {"fails": 0, "since": 0.0, "last_ok": 0.0, "last_model": "", "last_err": "", "kind": "",
+                       "free_tier": False}
+        self.paused_until = 0.0
+        self._alerted = {"active": False, "sent": 0.0}
+        self._recovered = None
+        self.spend = self._load_spend()
+        self.chains = self._resolve_chains() or self._default_chains()
+        self.discovered_at = time.time()
         self.models = self.chains["main"]
 
     # ---------- model seçimi ----------
+    @staticmethod
+    def _default_chains():
+        main = config.GEMINI_MODELS or ["gemini-flash-latest", "gemini-flash-lite-latest"]
+        cheap = main if config.GEMINI_MODELS else ["gemini-flash-lite-latest", "gemini-flash-latest"]
+        return {"main": main, "cheap": cheap, "review": (config.REVIEW_MODELS or ["gemini-pro-latest"]) + main}
+
     def _resolve_chains(self):
+        """Anahtarın erişebildiği modellerden zincirleri kurar. Liste alınamazsa None."""
         try:
             names = []
             for m in self.client.models.list():
@@ -296,44 +354,58 @@ class GeminiAnalyzer:
                 if actions and "generateContent" not in actions:
                     continue
                 names.append(m.name.replace("models/", ""))
-            self.available = names
         except Exception as e:
-            print(f"⚠️ Model listesi alınamadı ({e}), env'deki modeller kullanılacak.")
-            main = config.GEMINI_MODELS or ["gemini-flash-latest", "gemini-flash-lite-latest"]
-            return {"main": main, "review": (config.REVIEW_MODELS or ["gemini-pro-latest"]) + main}
-
+            print(f"⚠️ Model listesi alınamadı ({e}).")
+            return None
+        self.available = names
         usable = [n for n in names if n.startswith("gemini") and not any(w in n for w in _SKIP_WORDS)]
         flash = [n for n in usable if "flash" in n and "latest" not in n]
         full_flash = [n for n in flash if "lite" not in n]
         lite = [n for n in flash if "lite" in n]
         pro = [n for n in usable if "pro" in n and "latest" not in n]
 
-        main = [m for m in config.GEMINI_MODELS if m in names]
-        for m in _newest(full_flash, 2) + _newest(lite, 1):
-            if m not in main:
-                main.append(m)
+        def alias(name):
+            return [name] if name in names else []
+
+        def build(*groups):
+            out = []
+            for g in groups:
+                out.extend(m for m in g if m not in out)
+            return out
+
+        # En yeni modeller önce; "-latest" takma adları en sonda yedek (yeni çıkan bir model çalışmazsa hepsi düşmesin)
+        user_main = [m for m in config.GEMINI_MODELS if m in names]
+        main = build(user_main, _newest(full_flash, 2), _newest(lite, 1),
+                     alias("gemini-flash-latest"), alias("gemini-flash-lite-latest"))
         if not main:
             main = list(config.GEMINI_MODELS) or names[:1]
-
-        review = [m for m in config.REVIEW_MODELS if m in names]
-        extra = _newest(pro, 2) + (["gemini-pro-latest"] if "gemini-pro-latest" in names else [])
-        for m in extra + [m for m in main if "lite" not in m] + main:
-            if m not in review:
-                review.append(m)
+        cheap = build(user_main, _newest(lite, 2), alias("gemini-flash-lite-latest"), main)
+        review = build([m for m in config.REVIEW_MODELS if m in names], _newest(pro, 2),
+                       alias("gemini-pro-latest"), [m for m in main if "lite" not in m], main)
 
         for env_name, wanted in (("GEMINI_MODELS", config.GEMINI_MODELS), ("REVIEW_MODELS", config.REVIEW_MODELS)):
             missing = [m for m in wanted if m not in names]
             if missing:
                 print(f"⚠️ {env_name} içindeki bu modeller erişilebilir değil: {', '.join(missing)}")
-        print(f"🤖 Haber analizi modelleri: {', '.join(main)}")
-        print(f"🧐 İkinci görüş / rapor modelleri: {', '.join(review)}")
-        return {"main": main, "review": review}
+        print(f"🤖 Hacim/nabız/rapor modelleri: {', '.join(main)}")
+        print(f"💸 Haber analizi (ucuz) modelleri: {', '.join(cheap)}")
+        print(f"🧐 İkinci görüş modelleri: {', '.join(review)}")
+        return {"main": main, "cheap": cheap, "review": review}
+
+    def rediscover(self):
+        """Model listesini yeniden alır (yeni çıkan / kaldırılan modeller için yeniden başlatmaya gerek kalmasın)."""
+        self.discovered_at = time.time()
+        chains = self._resolve_chains()
+        if chains:
+            self.chains = chains
+            self.models = chains["main"]
+            self.dead.clear()
 
     def _config(self, model, kind):
-        deep = kind != "fast"
+        deep = kind in ("deep", "text")
         kwargs = dict(
             temperature=0.4 if kind == "text" else 0.2,
-            max_output_tokens={"fast": 1500, "deep": 4000, "text": 8000}[kind],
+            max_output_tokens={"fast": 1500, "pulse": 3000, "deep": 4000, "text": 8000}[kind],
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True))
         if kind != "text":
             kwargs["response_mime_type"] = "application/json"
@@ -348,97 +420,293 @@ class GeminiAnalyzer:
                 kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="MINIMAL")
         return types.GenerateContentConfig(**kwargs)
 
+    # ---------- sayaçlar, harcama ve bütçe ----------
+    def _roll(self):
+        """Gün / ay değişince sayaçları sıfırlar (gece yarısı, yerel saat)."""
+        today = today_str()
+        if self.day_date != today:
+            self.day = {k: 0 if k != "cost_usd" else 0.0 for k in self.day}
+            self.day_date = today
+        s = self.spend
+        if s.get("date") != today:
+            s.update(date=today, usd=0.0, by={}, calls={})
+        if s.get("month") != today[:7]:
+            s.update(month=today[:7], month_usd=0.0)
+
     def _inc(self, key, val=1):
+        self._roll()
         self.stats[key] += val
         self.day[key] += val
 
     def reset_day(self):
-        self.day = {k: 0 if k != "cost_usd" else 0.0 for k in self.day}
+        self._roll()   # sayaçlar artık gece yarısı kendiliğinden sıfırlanıyor
 
-    def _track_cost(self, model, response):
+    @staticmethod
+    def _load_spend():
+        try:
+            with open(SPEND_FILE) as f:
+                s = json.load(f)
+            if isinstance(s, dict):
+                return {"date": s.get("date", ""), "usd": float(s.get("usd", 0)), "by": dict(s.get("by", {})),
+                        "calls": dict(s.get("calls", {})), "month": s.get("month", ""),
+                        "month_usd": float(s.get("month_usd", 0))}
+        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+        return {"date": "", "usd": 0.0, "by": {}, "calls": {}, "month": "", "month_usd": 0.0}
+
+    def _save_spend(self):
+        try:
+            tmp = SPEND_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.spend, f)
+            os.replace(tmp, SPEND_FILE)
+        except OSError as e:
+            print(f"⚠️ Gemini harcama kaydı yazılamadı: {e}")
+
+    def _track_cost(self, model, response, purpose):
         um = getattr(response, "usage_metadata", None)
         if not um:
             return
         pin, pout = _price(model)
         tin = getattr(um, "prompt_token_count", 0) or 0
         tout = (getattr(um, "candidates_token_count", 0) or 0) + (getattr(um, "thoughts_token_count", 0) or 0)
-        self._inc("cost_usd", tin / 1e6 * pin + tout / 1e6 * pout)
+        cost = tin / 1e6 * pin + tout / 1e6 * pout
+        self._inc("cost_usd", cost)
+        s = self.spend
+        s["usd"] += cost
+        s["month_usd"] += cost
+        s["by"][purpose] = s["by"].get(purpose, 0.0) + cost
+        s["calls"][purpose] = s["calls"].get(purpose, 0) + 1
+        self._save_spend()
 
-    def _call(self, chain, prompt, kind):
-        """Zincirdeki modelleri sırayla dener. (metin, model) veya (None, None) döner."""
-        retries = config.GEMINI_RETRIES_PER_MODEL if chain == "main" else 1
+    def over_budget(self):
+        self._roll()
+        return config.GEMINI_GUNLUK_BUTCE_USD > 0 and self.spend["usd"] >= config.GEMINI_GUNLUK_BUTCE_USD
+
+    def allowed(self, purpose):
+        """Bu iş için şu an Gemini çağrılabilir mi? (ok, sebep)"""
         now = time.time()
-        order = [m for m in self.chains[chain] if m not in self.dead]
+        if now < self.paused_until:
+            return False, (f"art arda {self.health['fails']} başarısız çağrı, "
+                           f"{int((self.paused_until - now) / 60) + 1} dk mola")
+        frac, budget = BUDGET_STOP.get(purpose), config.GEMINI_GUNLUK_BUTCE_USD
+        if frac and budget > 0:
+            self._roll()
+            if self.spend["usd"] >= budget * frac:
+                return False, (f"günlük Gemini bütçesinin %{frac * 100:.0f}'i harcandı "
+                               f"(${self.spend['usd']:.3f} / ${budget:g})")
+        return True, ""
+
+    # ---------- sağlık ----------
+    def _ok(self, model):
+        h = self.health
+        if h["fails"] and self._alerted["active"]:
+            self._recovered = (time.time() - h["since"], model)
+        h.update(fails=0, last_ok=time.time(), last_model=model, kind="")
+        self.paused_until = 0.0
+        self.last_fatal_error = None
+
+    def _fail(self, kind, err):
+        now = time.time()
+        h = self.health
+        if h["fails"] == 0:
+            h["since"] = now
+        h["fails"] += 1
+        h["kind"], h["last_err"] = kind, err[:500]
+        if kind in FATAL_KINDS or kind == "model_yok":
+            self.last_fatal_error = err[:300]
+        if h["fails"] >= config.AI_PAUSE_AFTER_FAILS:
+            # Art arda hata: her çağrıda modelleri tek tek deneyip döngüyü bekletmesin, kısa mola ver
+            self.paused_until = now + config.AI_PAUSE_MIN * 60
+
+    def hint(self):
+        h = self.health
+        if h["kind"] == "anahtar":
+            return ("🔑 API anahtarı geçersiz, süresi dolmuş ya da Google tarafından kapatılmış olabilir (anahtar herkese "
+                    "açık bir yerde görünürse Google otomatik kapatır). aistudio.google.com/apikey adresinden yeni anahtar "
+                    "oluştur, env.sh içindeki GEMINI_API_KEY'i değiştir ve botu yeniden başlat.")
+        if h["kind"] == "fatura" or h["free_tier"]:
+            return ("💳 Büyük ihtimalle kredi / faturalandırma sorunu: ücretli katman kredisi bitmiş olabilir. "
+                    "aistudio.google.com → Billing (Faturalandırma) sayfasında kalan krediyi ve projenin ücretli katmanda "
+                    "olduğunu kontrol et. Kullanım: aistudio.google.com/usage")
+        if h["kind"] == "konum":
+            return "🌍 Google, sunucunun bulunduğu ülkeden Gemini API kullanımına izin vermiyor (sunucu konumu)."
+        if h["kind"] == "model_yok":
+            return "🤖 Zincirdeki modellerin hiçbiri kullanılamıyor; bot model listesini 30 dk içinde kendisi yeniler."
+        if h["kind"] == "baglanti":
+            return "🌐 Sunucu Google'a bağlanamıyor (ağ / DNS sorunu) ya da Gemini kütüphanesi hata veriyor."
+        return ("⏳ Kota veya yoğunluk sınırı. Saatlerce sürüyorsa kota/kredi bitmiş olabilir: aistudio.google.com/usage "
+                "ve Billing sayfalarına bak.")
+
+    def health_alert(self):
+        """Bot döngüsü çağırır. Gönderilmesi gereken bir Telegram uyarısı varsa metnini döner, yoksa None."""
+        now = time.time()
+        h = self.health
+        if self._recovered:
+            dur, model = self._recovered
+            self._recovered = None
+            self._alerted = {"active": False, "sent": 0.0}
+            return f"✅ <b>Gemini tekrar çalışıyor</b> ({_dur(dur)} süren kesintiden sonra, model: {_esc(model)})."
+        fatal = h["kind"] in FATAL_KINDS
+        if h["fails"] == 0 or (not fatal and h["fails"] < config.AI_ALERT_AFTER_FAILS):
+            return None
+        if self._alerted["active"] and now - self._alerted["sent"] < ALERT_REPEAT_SEC:
+            return None
+        self._alerted = {"active": True, "sent": now}
+        return (f"⚠️ <b>Gemini çalışmıyor</b>\n"
+                f"{fmt_ts(h['since'])} saatinden beri yanıt yok ({_dur(now - h['since'])}, art arda {h['fails']} "
+                f"başarısız çağrı).\n<b>Son hata:</b> {_esc(h['last_err'][:400])}\n\n{self.hint()}\n\n"
+                "Bot çalışmaya devam ediyor: listeleme duyuruları Gemini'siz alınır; haber analizi, hacim yorumu ve "
+                "Piyasa Nabzı Gemini dönene kadar çalışmaz. Düzelince haber vereceğim.")
+
+    def status_line(self):
+        h = self.health
+        if h["fails"]:
+            return (f"❌ {fmt_ts(h['since'])} saatinden beri yanıt yok ({h['fails']} başarısız çağrı) — "
+                    f"son hata: {h['last_err'][:160]}")
+        if h["last_ok"]:
+            return f"✅ çalışıyor (son yanıt {fmt_ts(h['last_ok'], with_date=False)}, {h['last_model']})"
+        return "henüz çağrı yapılmadı"
+
+    def spend_line(self):
+        self._roll()
+        s, budget, rate = self.spend, config.GEMINI_GUNLUK_BUTCE_USD, config.USD_TRY
+        out = (f"bugün ${s['usd']:.3f}" + (f" / ${budget:g} bütçe" if budget > 0 else "")
+               + f" (≈{s['usd'] * rate:.1f} TL) | bu ay ${s['month_usd']:.2f} (≈{s['month_usd'] * rate:.0f} TL)")
+        by = sorted(s["by"].items(), key=lambda kv: -kv[1])
+        if by:
+            out += "\nDağılım: " + ", ".join(f"{PURPOSE_NAMES.get(k, k)} ${v:.3f} ({s['calls'].get(k, 0)} çağrı)"
+                                             for k, v in by)
+        if self.over_budget():
+            out += "\n⏸️ Günlük bütçe doldu: hacim yorumu ve Piyasa Nabzı gece yarısına kadar duraklatıldı."
+        elif budget > 0 and s["usd"] >= budget * BUDGET_STOP["nabiz"]:
+            out += (f"\n⏸️ Bütçenin %{BUDGET_STOP['nabiz'] * 100:.0f}'i harcandı: Piyasa Nabzı gece yarısına kadar "
+                    "duraklatıldı.")
+        return out
+
+    # ---------- çağrı ----------
+    def _call(self, chain, prompt, kind, purpose):
+        """Zincirdeki modelleri sırayla dener. (metin, model) veya (None, None) döner."""
+        ok, why = self.allowed(purpose)
+        if not ok:
+            self._inc("skipped")
+            print(f"⏸️ Gemini çağrısı atlandı ({PURPOSE_NAMES.get(purpose, purpose)}): {why}")
+            return None, None
+        now = time.time()
+        if now - self.discovered_at > REDISCOVER_SEC or (self.health["fails"] >= 10 and now - self.discovered_at > 1800):
+            self.rediscover()
+        retries = config.GEMINI_RETRIES_PER_MODEL if chain != "review" else 1
+        order = [m for m in (self.chains.get(chain) or self.chains["main"]) if m not in self.dead]
         order.sort(key=lambda m: self.cooldown.get(m, 0) > now)   # dinlenen modeller sona
         good = self.last_good.get(chain)
         if good in order:
             order.remove(good)
             order.insert(0, good)
         if not order:
-            self.last_fatal_error = "Hiçbir Gemini modeli kullanılamıyor (hepsi 404/400 verdi)."
+            self._fail("model_yok", "Hiçbir Gemini modeli kullanılamıyor (hepsi 404/400 ya da kota 0 verdi).")
             return None, None
 
-        for mi, model in enumerate(order):
+        err_kind, last_err = "yogun", ""
+        for mi, model in enumerate(order[:MAX_MODELS_PER_CALL]):
             if mi > 0:
                 print(f"🔁 Yedek modele geçiliyor: {model}")
-            attempts, delay, overloaded = 0, 2, False
+            attempts, delay, cool = 0, 2, 0
             while attempts < retries:
                 try:
+                    cfg = self._config(model, kind)
+                except Exception as e:   # eski kütüphane yeni ayarı tanımıyorsa düşünme ayarı olmadan dene
+                    if model in self.no_thinking_cfg:
+                        print(f"❌ {model} için istek ayarı kurulamadı ({e}), listeden çıkarıldı.")
+                        self.dead.add(model)
+                        err_kind, last_err = "baglanti", f"istek ayarı kurulamadı: {e}"[:500]
+                        break
+                    print(f"ℹ️ {model} için ayar kurulamadı ({e}), düşünme ayarı olmadan denenecek.")
+                    self.no_thinking_cfg.add(model)
+                    continue
+                try:
                     self._inc("calls")
-                    resp = self.client.models.generate_content(
-                        model=model, contents=prompt, config=self._config(model, kind))
-                    self._track_cost(model, resp)
+                    resp = self.client.models.generate_content(model=model, contents=prompt, config=cfg)
+                    self._track_cost(model, resp, purpose)
                     text = resp.text
                     if not text or (kind != "text" and not re.search(r"\{.*\}", text, re.DOTALL)):
                         attempts += 1
-                        print(f"⚠️ {model} boş/JSON olmayan yanıt verdi.")
+                        err_kind, last_err = "yogun", f"{model} boş/JSON olmayan yanıt verdi"
+                        print(f"⚠️ {last_err}.")
                         continue
                     if mi > 0:
                         self._inc("fallbacks")
                     self.cooldown.pop(model, None)
                     self.last_good[chain] = model
-                    self.last_fatal_error = None
+                    self._ok(model)
                     return text, model
                 except errors.APIError as e:
                     self._inc("errors")
                     code = getattr(e, "code", 0) or 0
-                    msg = str(e)
-                    low = msg.lower()
-                    if code in (401, 403) or "api key" in low or "api_key" in low or "billing" in low:
-                        # Anahtar / faturalandırma sorunu: başka modeli denemek de boşuna
-                        self.last_fatal_error = f"{code}: {msg[:300]}"
-                        print(f"❌ GEMINI API HATASI {self.last_fatal_error}")
+                    low = str(e).lower()
+                    last_err = _err_text(e)
+                    if "free_tier" in low:
+                        self.health["free_tier"] = True
+                    fatal = None
+                    if code in (401, 403) or "api key" in low or "api_key" in low:
+                        fatal = "anahtar"
+                    elif "location is not supported" in low or "not available in your country" in low:
+                        fatal = "konum"
+                    elif (any(w in low for w in ("prepay", "credit", "billing account", "spending cap", "spend cap"))
+                          or (code == 400 and "billing" in low)):
+                        fatal = "fatura"
+                    if fatal:
+                        # Anahtar / fatura / konum sorunu: başka modeli denemek de boşuna
+                        print(f"❌ GEMINI API HATASI ({fatal}) {last_err}")
+                        self._fail(fatal, last_err)
                         return None, None
                     if code == 404:
                         print(f"❌ Model artık kullanılamıyor, listeden çıkarıldı: {model}")
                         self.dead.add(model)
+                        err_kind = "model_yok"
+                        break
+                    if code == 429 and re.search(r"limit\W{0,3}0\b", low):
+                        print(f"❌ {model} bu anahtarın katmanında kullanılamıyor (kota 0), listeden çıkarıldı.")
+                        self.dead.add(model)
+                        err_kind = "kota"
                         break
                     if code == 400:
                         if model not in self.no_thinking_cfg:
                             self.no_thinking_cfg.add(model)
                             print(f"ℹ️ {model} ayarları kabul etmedi, düşünme ayarı olmadan tekrar deneniyor.")
                             continue
-                        print(f"❌ {model} isteği reddetti (400), listeden çıkarıldı: {msg[:150]}")
+                        print(f"❌ {model} isteği reddetti (400), listeden çıkarıldı: {last_err[:150]}")
                         self.dead.add(model)
+                        err_kind = "model_yok"
                         break
-                    overloaded = overloaded or code in (429, 500, 502, 503, 504)
                     attempts += 1
+                    if code == 429:
+                        # Kota: aynı modeli hemen tekrar denemek boşuna; günlük kota ise daha uzun dinlendir
+                        err_kind = "kota"
+                        cool = max(cool, 3600 if ("perday" in low or "per_day" in low) else MODEL_COOLDOWN_SEC)
+                        attempts = retries
+                        print(f"⏳ Gemini {model} kota sınırı (429): {last_err[:200]}")
+                        continue
+                    if code in (500, 502, 503, 504):
+                        err_kind = "yogun"
+                        cool = max(cool, MODEL_COOLDOWN_SEC)
                     if attempts < retries:
-                        print(f"⏳ Gemini {model} yoğun ({code}). {delay} sn sonra tekrar ({attempts}/{retries})")
+                        print(f"⏳ Gemini {model} hata ({code}). {delay} sn sonra tekrar ({attempts}/{retries})")
                         time.sleep(delay)
                         delay = min(delay * 2, 15)
                     else:
-                        print(f"⏳ Gemini {model} yoğun ({code}).")
+                        print(f"⏳ Gemini {model} hata ({code}): {last_err[:200]}")
                 except Exception as e:
                     self._inc("errors")
                     attempts += 1
+                    err_kind, last_err = "baglanti", f"{type(e).__name__}: {e}"[:500]
                     print(f"❌ Gemini bağlantı hatası ({model}): {e}")
                     if attempts < retries:
                         time.sleep(delay)
                         delay = min(delay * 2, 15)
-            if overloaded:
-                self.cooldown[model] = time.time() + MODEL_COOLDOWN_SEC
-                print(f"😴 {model} {MODEL_COOLDOWN_SEC // 60} dk dinlendiriliyor, bu sürede yedek model öncelikli.")
+            if cool:
+                self.cooldown[model] = time.time() + cool
+                print(f"😴 {model} {cool // 60} dk dinlendiriliyor, bu sürede yedek model öncelikli.")
+        self._fail(err_kind, last_err or "bilinmeyen hata")
         return None, None
 
     @staticmethod
@@ -453,7 +721,7 @@ class GeminiAnalyzer:
         prompt = FACTS_PROMPT.format(source=item["source"], age=age, title=item["title"],
                                      summary=item["summary"] or "-", categories=item["categories"] or "-")
         print(f"🧠 Gemini -> [{item['source']}] {item['title'][:70]}")
-        text, model = self._call("main", prompt, "fast")
+        text, model = self._call("cheap", prompt, "fast", "haber")
         if text is None:
             return None
         try:
@@ -505,7 +773,7 @@ class GeminiAnalyzer:
             since=f"{since:+.2f}%" if since is not None else "bilinmiyor",
             regime=regime_text)
         print(f"🧐 İkinci görüş isteniyor: {res['hedef_coin']} ({int(res['puan'])}/10)")
-        text, model = self._call("review", prompt, "deep")
+        text, model = self._call("review", prompt, "deep", "ikinci_gorus")
         if text is None:
             return None
         try:
@@ -529,9 +797,7 @@ class GeminiAnalyzer:
     def pulse_analysis(self, data_text):
         """Saatlik piyasa yorumu + izleme listesi. dict veya None döner."""
         prompt = PULSE_PROMPT.format(data=data_text)
-        text, model = self._call("review", prompt, "deep")
-        if text is None:
-            text, model = self._call("main", prompt, "fast")
+        text, model = self._call("main", prompt, "pulse", "nabiz")
         try:
             raw = self._json(text) if text else None
         except (json.JSONDecodeError, ValueError):
@@ -565,7 +831,7 @@ class GeminiAnalyzer:
     def judge_spike(self, coin, move, ratio, vol, ch24, trending, watch, pulse, regime, headlines):
         prompt = SPIKE_PROMPT.format(coin=coin, move=move, ratio=ratio, vol=vol, ch24=ch24, trending=trending,
                                      watch=watch, pulse=pulse, regime=regime, headlines=headlines)
-        text, model = self._call("main", prompt, "fast")
+        text, model = self._call("main", prompt, "fast", "hacim")
         try:
             raw = self._json(text) if text else None
         except (json.JSONDecodeError, ValueError):
@@ -587,7 +853,5 @@ class GeminiAnalyzer:
     def commentary(self, data_text):
         prompt = REPORT_PROMPT.format(data=data_text, stop=f"{config.HARD_STOP_PCT:g}",
                                       ts=f"{config.TIME_STOP_MIN:g}")
-        text, _ = self._call("review", prompt, "text")
-        if text is None:
-            text, _ = self._call("main", prompt, "text")
+        text, _ = self._call("main", prompt, "text", "rapor")
         return text
