@@ -211,6 +211,20 @@ PULSE_SCORE_BONUS = _float("PULSE_SCORE_BONUS", 1)         # izleme listesindeki
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")     # isteğe bağlı (ücretsiz "demo" anahtarı)
 
 # ==========================================
+# İZLEME LİSTESİ HABERLERİ (coine özel haber araması)
+# ==========================================
+# Her WATCH_NEWS_MINUTES dakikada bir Piyasa Nabzı izleme listesindeki ve CoinGecko trend listesindeki coinler için
+# Google News'te coine özel haber aranır (hacim patlamasını beklemeden). Başlığında coin geçen yeni haberler normal
+# haber yolundan geçer: kural filtresi -> Gemini -> puan -> "tren kaçtı" kontrolü.
+WATCH_NEWS_ENABLED = _bool("WATCH_NEWS_ENABLED", True)
+WATCH_NEWS_MINUTES = _float("WATCH_NEWS_MINUTES", 30)
+WATCH_NEWS_MAX_COINS = _int("WATCH_NEWS_MAX_COINS", 20)        # her turda en fazla bu kadar coin aranır
+# Arama sonuçları haber sitelerinden geç düşebildiği için bu haberlerde yaş sınırı daha geniş; haberden sonra fiyat
+# zaten %LATE_MOVE_PCT yükseldiyse "tren kaçtı" kuralı yine alımı engeller.
+WATCH_NEWS_MAX_AGE_MIN = _float("WATCH_NEWS_MAX_AGE_MIN", 180)
+WATCH_NEWS_MAX_PER_RUN = _int("WATCH_NEWS_MAX_PER_RUN", 15)    # bir turda Gemini'ye gidecek en fazla yeni haber
+
+# ==========================================
 # TELEGRAM HABER KANALLARI (isteğe bağlı, my.telegram.org'dan API anahtarı gerekir)
 # ==========================================
 TG_API_ID = _int("TG_API_ID", 0)

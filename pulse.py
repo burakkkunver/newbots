@@ -99,13 +99,14 @@ class MarketPulse:
 
         bases = self.scanner.bases() or {v["base"] for v in self.bx.symbols.values()}
         recent, older = Counter(), Counter()
-        for it in list(self.feed.recent.values()):
+        news = [it for it in list(self.feed.recent.values()) if not it.get("watch")]   # izleme aramaları sayılmaz
+        for it in news:
             if "_coins" not in it:
                 it["_coins"] = sorted(c for c in coins_in_title(it["title"], bases) if c not in STABLES)
             (recent if now - it["published"] <= 2 * 3600 else older).update(it["_coins"])
         d["mentions"] = [(c, n, older.get(c, 0)) for c, n in recent.most_common(10)]
         d["headlines"] = [(it["source"], it["title"]) for it in sorted(
-            self.feed.recent.values(), key=lambda x: -x["published"]) if now - it["published"] <= 2 * 3600][:25]
+            news, key=lambda x: -x["published"]) if now - it["published"] <= 2 * 3600][:25]
         d["regime"] = self.market.describe()
         return d, self.format(d)
 

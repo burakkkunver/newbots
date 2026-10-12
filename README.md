@@ -50,10 +50,13 @@ Kurulum için: **[KURULUM.md](KURULUM.md)**
 11. **Sanal işlemler:** Coin testnette yoksa bot onu almış gibi yapar, gerçek fiyatını (Binance gerçek piyasa → Gate.io → MEXC)
     takip eder ve aynı kurallarla satar. Her testnet alımının da gerçek Binance fiyatıyla bir "aynası" tutulur
     (testnet fiyatları küçük coinlerde gerçek piyasadan çok sapabiliyor). Ayrıntı: KURULUM.md 9.4.
-12. **Gemini sağlığı ve bütçesi:** Gemini art arda hata verirse Telegram'a sebebiyle uyarı gelir; haberler ucuz lite modelle,
+12. **İzleme listesi haberleri:** Nabız izleme listesindeki ve CoinGecko trend listesindeki coinler için 30 dk'da bir
+    Google News'te coine özel haber aranır (hacim patlamasını beklemeden); bulunanlar normal haber yolundan geçer.
+    Ayrıntı: KURULUM.md 9.6.
+13. **Gemini sağlığı ve bütçesi:** Gemini art arda hata verirse Telegram'a sebebiyle uyarı gelir; haberler ucuz lite modelle,
     pro model sadece ikinci görüşte. Günlük bütçe sınırı (varsayılan 0,15 $ ≈ 200 TL/ay). Ayrıntı: KURULUM.md 9.5.
-13. **Kalibrasyon:** Analiz edilen her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı ölçülür (`data/calibration.csv`).
-14. **Telegram:** sinyaller, işlemler, rejim değişimleri, 20 dk'da bir özet, her gün 23:00'te detaylı rapor + yapay zeka yorumu.
+14. **Kalibrasyon:** Analiz edilen her haberden sonra fiyatın 15 dk / 1 saat / 4 saat içinde ne yaptığı ölçülür (`data/calibration.csv`).
+15. **Telegram:** sinyaller, işlemler, rejim değişimleri, 20 dk'da bir özet, her gün 23:00'te detaylı rapor + yapay zeka yorumu.
    Komutlar: `/durum`, `/rejim`, `/nabiz`, `/sanal`, `/kalibrasyon`, `/rapor`, `/dosyalar`, `/yardim`.
 
 ## Dosyalar
@@ -62,6 +65,7 @@ Kurulum için: **[KURULUM.md](KURULUM.md)**
 - `pulse.py` Piyasa Nabzı · `tgnews.py` Telegram kanal okuyucu · `tg_login.py` Telegram tek seferlik giriş
 - `trader.py` alım/çıkış/pozisyon takibi · `binance_api.py` Binance REST · `calibration.py` ölçüm · `report.py` gece raporu
 - `paper.py` sanal işlemler (testnette olmayan coinler + gerçek fiyat aynası) · `prices.py` Binance/Gate.io/MEXC gerçek fiyatları
+- `watchnews.py` izleme listesi / trend coinleri için coine özel haber araması (Google News)
 - `config.py` tüm ayarlar · `check.py` kurulum testi · `analiz.py` kalibrasyon analizi · `start.sh` başlatıcı
 - `data/` → `signals.csv`, `calibration.csv`, `trades.csv`, `sanal_islemler.csv`, `positions.json`, `paper.json`,
-  `gemini_harcama.json`, `reports/`, `bot.log` (otomatik oluşur)
+  `gemini_harcama.json`, `watch_news.json`, `reports/`, `bot.log` (otomatik oluşur)

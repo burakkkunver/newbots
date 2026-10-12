@@ -50,9 +50,10 @@ def _avg(vals):
 
 
 class Reporter:
-    def __init__(self, trader, market, ai, feed, scanner=None, ann=None, pulse=None, tg=None, paper=None):
+    def __init__(self, trader, market, ai, feed, scanner=None, ann=None, pulse=None, tg=None, paper=None, watch=None):
         self.trader, self.market, self.ai, self.feed = trader, market, ai, feed
         self.scanner, self.ann, self.pulse, self.tg, self.paper = scanner, ann, pulse, tg, paper
+        self.watch = watch
 
     def due(self):
         now = now_local()
@@ -256,6 +257,8 @@ class Reporter:
             S.append("Duyuru kaynakları: " + esc(", ".join(f"{k}: {v}" for k, v in self.ann.status.items())))
         if self.tg:
             S.append("Telegram kanalları: " + esc(self.tg.status_text()))
+        if self.watch:
+            S.append("İzleme haberleri: " + esc(self.watch.status_text()))
 
         d = self.ai.day
         bad_feeds = ", ".join(self.feed.feed_errors) or "hepsi çalışıyor"

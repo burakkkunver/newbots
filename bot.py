@@ -29,6 +29,7 @@ from prices import PriceSources
 from report import REPORT_DIR, SIGNALS_CSV, SIGNALS_HEADER, Reporter
 from scanner import MomentumScanner
 from tgnews import TelegramNews
+from watchnews import WatchNews
 from trader import TRADES_CSV, TRADES_HEADER, Trader
 from util import SRC_SCANNER, append_csv, fmt_ts, migrate_csv, today_str
 
@@ -82,9 +83,11 @@ class Bot:
         self.pulse = MarketPulse(self.trader.bx, self.feed, self.scanner, self.market, self.ai)
         self.tg = TelegramNews()
         self.tg_pending = []
+        self.watch = WatchNews(self.pulse, self.feed)
+        self.watch_pending = []
         self.spike_ai_times = deque()
         self.reporter = Reporter(self.trader, self.market, self.ai, self.feed, self.scanner, self.ann,
-                                 self.pulse, self.tg, self.paper)
+                                 self.pulse, self.tg, self.paper, self.watch)
         self.ai_fails = {}
         self.analyzed = 0
         self.filtered = 0
@@ -104,6 +107,7 @@ class Bot:
         if config.PAPER_ENABLED:
             threading.Thread(target=self.paper.monitor_forever, args=(self.stop_event,), daemon=True).start()
         self.tg.start()
+        self.watch.start(self.stop_event)
         send_telegram(
             f"🚀 <b>Kripto Haber Botu Başlatıldı</b>\n\n{exch}\n"
             f"<b>Bot bütçesi:</b> {config.BUDGET_USDT:g} USDT | <b>Açık pozisyon:</b> {len(self.trader.positions)}\n"
@@ -124,6 +128,9 @@ class Bot:
             f"<b>Piyasa Nabzı:</b> {'her ' + format(config.PULSE_MINUTES, 'g') + ' dk' if config.PULSE_ENABLED else 'kapalı'}"
             f" | <b>Telegram kanalları:</b> "
             f"{esc(', '.join('@' + c for c in config.TG_NEWS_CHANNELS)) if self.tg.enabled else 'yapılandırılmadı'}\n"
+            f"<b>İzleme haberleri:</b> "
+            + (f"her {config.WATCH_NEWS_MINUTES:g} dk, nabız izleme listesi + CoinGecko trend coinleri için coine özel "
+               f"haber araması\n" if config.WATCH_NEWS_ENABLED else "kapalı\n")
             + ("🧪 <b>Testnet öğrenme modu AÇIK:</b> eşikler 1 puan düşük, ikinci görüş güveni "
                f"{config.REVIEW_MIN_CONFIDENCE:g}, hacim/listeleme sinyalleriyle alım açık.\n" if config.LEARNING else "")
             + (f"🧪 <b>Sanal işlem AÇIK:</b> testnette olmayan coinler gerçek fiyatla ("
@@ -291,21 +298,33 @@ class Bot:
                     f"<b>Durum:</b> {esc(desc)}\n{esc(ann['link'])}")
 
     # ---------- Telegram kanal mesajları ----------
-    def tg_tick(self):
-        items = self.tg_pending + self.tg.drain()
-        self.tg_pending = []
+    def _process_queue(self, items, max_age_min):
+        """Kuyruktan gelen haberleri (Telegram, izleme haberleri) işler; Gemini yanıt vermediği için
+        sonraki turda tekrar denenecek olanları döner."""
+        retry = []
         if not items:
-            return
+            return retry
         regime = self.market.info()
-        max_age = config.MAX_NEWS_AGE_MIN * 60
         for it in items:
             self.feed.add_recent(it)
-            if self.feed.is_seen(it) or time.time() - it["published"] > max_age:
+            if self.feed.is_seen(it) or time.time() - it["published"] > max_age_min * 60:
                 continue
             self.process(it, regime)
             if not self.feed.is_seen(it) and self.ai_fails.get(it["id"], 0) < MAX_AI_FAILS_PER_NEWS:
-                self.tg_pending.append(it)   # Gemini yanıt vermedi, sonraki turda tekrar denenecek
+                retry.append(it)   # Gemini yanıt vermedi, sonraki turda tekrar denenecek
             self.poll(0)
+        return retry
+
+    def tg_tick(self):
+        items = self.tg_pending + self.tg.drain()
+        self.tg_pending = []
+        self.tg_pending = self._process_queue(items, config.MAX_NEWS_AGE_MIN)
+
+    # ---------- izleme listesi haberleri ----------
+    def watch_tick(self):
+        items = self.watch_pending + self.watch.drain()
+        self.watch_pending = []
+        self.watch_pending = self._process_queue(items, config.WATCH_NEWS_MAX_AGE_MIN)
 
     # ---------- haber işleme ----------
     def process(self, item, regime):
@@ -424,6 +443,7 @@ class Bot:
             f"{self.analyzed} haber analiz edildi, {self.filtered} kural filtresine takıldı | RSS sorunlu: {bad}\n"
             f"<b>Hacim tarayıcı:</b> {self.scanner.stats['scans']} tarama, {self.scanner.stats['signals']} sinyal "
             f"({esc(self.scanner.status)})\n<b>Telegram kanalları:</b> {esc(self.tg.status)}\n"
+            f"<b>İzleme haberleri:</b> {esc(self.watch.status_text())}\n"
             f"<b>Nabız:</b> {esc(self.pulse.short_text()[:300])}\n<b>Duyurular:</b> "
             + esc(", ".join(f"{k}: {v.split(' (')[0]}" for k, v in self.ann.status.items()))))
 
@@ -479,6 +499,7 @@ class Bot:
             try:
                 self.alt_tick()
                 self.tg_tick()
+                self.watch_tick()
                 self.ai_health_tick()
                 regime = self.market.refresh()
                 if self.pulse.due() and self.pulse.run() and self.pulse.should_notify():
@@ -490,6 +511,7 @@ class Bot:
                     self.poll(0)   # uzun analizlerde de komutlar cevapsız kalmasın
                     self.alt_tick()
                     self.tg_tick()   # Telegram haberleri RSS'i beklemeden işlensin
+                    self.watch_tick()
                 done = self.calib.process_due()
                 if done:
                     print(f"🎯 {done} kalibrasyon ölçümü tamamlandı.")
@@ -520,6 +542,7 @@ class Bot:
                 self.poll(min(left, 10))
                 self.alt_tick()   # tarayıcı ve duyurular kendi zamanlamasıyla çalışır
                 self.tg_tick()
+                self.watch_tick()
                 self.ai_health_tick()
 
 

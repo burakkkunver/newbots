@@ -148,6 +148,7 @@ Beklenen çıktı:
 ✅ BTC rejimi: 📈 Boğa (BTC 24s +2.1%, ...) -> alım için en az 7 puan, ...
 ✅ RSS: 10/10 kaynak çalışıyor
 ✅ Sanal işlem fiyat kaynakları: 3/3 kaynak çalışıyor
+✅ İzleme listesi haberleri: Google News ve CoinGecko erişilebilir (.. örnek haber)
 ```
 
 Gemini satırı ❌ verirse altında **son hata** ve ne yapman gerektiği yazar (kredi bitti, anahtar geçersiz, kota...).
@@ -256,12 +257,18 @@ Bot bu kanalları **senin Telegram hesabınla** okur:
 | Kanal | Neden |
 |---|---|
 | `@WatcherGuru` | En hızlı büyük kripto/makro manşet kanalı ("JUST IN") |
-| `@TreeNewsFeed` | Borsa duyuruları + 2000'den fazla X hesabından süzülmüş manşetler |
+| `@TreeNewsFeed` | Borsa duyuruları + X manşetleri. **Not:** Ekim 2026'da ~14 gündür mesaj atmıyor; yerine `@ChannelPANews` önerilir (aşağıda). |
 | `@BWEnews` | Çok hızlı, Asya borsaları ve listelemeler |
 | `@wublockchainenglish` | Wu Blockchain: az ama kaliteli; Asya, madencilik, zincir üstü |
 | `@binance_announcements` | Binance resmi duyuruları (listeleme, yeni çiftler) |
 
-Listeyi değiştirmek için `env.sh`'e şunu ekle: `export TG_NEWS_CHANNELS="WatcherGuru,TreeNewsFeed,BWEnews"`.
+**Listeyi değiştirmek:** Bu satır `env.sh`'de varsayılan olarak yoktur (liste kodun içindedir). Değiştirmek için `env.sh`'in en altına kendin ekle. Örnek, TreeNewsFeed yerine PANews (hızlı haber, ağırlıkla Çince/Asya):
+
+```bash
+export TG_NEWS_CHANNELS="WatcherGuru,ChannelPANews,BWEnews,wublockchainenglish,binance_announcements"
+```
+
+Sonra botu durdur, `python3 check.py` ile kanalların okunduğunu ve son mesaj yaşlarını kontrol et, botu başlat.
 
 ### Kurulum (bir kez, ~5 dakika)
 
@@ -414,6 +421,40 @@ Harcama diske yazılır, botu yeniden başlatmak bütçeyi sıfırlamaz. Raporda
 
 ---
 
+## 9.6 İzleme listesi haberleri: coine özel haber araması
+
+Genel haber siteleri küçük projelerin kendi gelişmelerini ya geç yazıyor ya hiç yazmıyor. Örnek: Starknet'in "L1 olmak istiyoruz" haberi Decrypt'e ancak STRK +%20 yükseldikten sonra düştü.
+
+Bu yüzden bot her **30 dakikada** bir şu coinler için Google News'te coine özel haber arar:
+- Piyasa Nabzı'nın **izleme listesi** (Gemini'nin "hikâyesi var" dediği coinler)
+- **CoinGecko trend** coinleri (insanların şu an en çok aradığı coinler)
+
+Arama hacim patlamasını beklemez; coin henüz hareket etmeden haberi yakalamak için.
+
+**Nasıl çalışır:**
+- Her turda en fazla 20 coin aranır. BTC, ETH ve stablecoinler aranmaz; onların haberleri zaten bol.
+- Sadece başlığında coinin adı veya sembolü geçen haberler alınır. Coin adı CoinGecko'dan öğrenilir ve saklanır.
+- Bu haberler normal haber yolundan geçer: kural filtresi → Gemini → puan → BTC rejimi → "tren kaçtı" kontrolü.
+- Arama sonuçları haber sitelerinden geç düşebildiği için yaş sınırı 20 dk değil **3 saat**. Haberden sonra fiyat zaten %3 yükseldiyse "tren kaçtı" kuralı alımı yine engeller.
+- Aynı haber başka kaynaktan (RSS, Telegram) daha önce geldiyse tekrar işlenmez. Birkaç yayıncıdan gelirse en erken yayınlanan esas alınır.
+- Bulunan haberler hacim patlaması değerlendirmesinde de Gemini'ye bağlam olarak gider.
+- Piyasa Nabzı'nın "haberlerde en çok geçen coinler" sayımına karışmaz. Yoksa izlenen coin daha çok haber alıp listede kendini tutardı.
+- Arama arka planda yapılır, ana döngüyü bekletmez. Google ve CoinGecko ücretsiz ve anahtarsız. Gemini maliyeti haber başına ucuz lite modelle çok küçük; fiyat tahmini gibi başlıklar zaten kural filtresinde kalır.
+
+**Nerede görünür:** Raporda ve `signals.csv`'de kaynak **"İzleme haberi"**; `/durum` ve gece raporunda "İzleme haberleri" satırı (son arama, bulunan haber, izlenen coinler). Kalibrasyon bu kaynağın işe yarayıp yaramadığını ayrıca ölçer (`analiz.py` → "Kaynağa göre").
+
+**Ayarlar** (`env.sh`, isteğe bağlı):
+
+| Ayar | Varsayılan | Ne yapar |
+|---|---|---|
+| `WATCH_NEWS_ENABLED` | True | Açar / kapatır |
+| `WATCH_NEWS_MINUTES` | 30 | Arama sıklığı (dk) |
+| `WATCH_NEWS_MAX_COINS` | 20 | Bir turda aranan en fazla coin |
+| `WATCH_NEWS_MAX_AGE_MIN` | 180 | Haberin en fazla yaşı (dk) |
+| `WATCH_NEWS_MAX_PER_RUN` | 15 | Bir turda Gemini'ye gidecek en fazla yeni haber |
+
+---
+
 ## 10. Kod güncellendiğinde
 
 ```bash
@@ -450,6 +491,7 @@ source venv/bin/activate && pip install -r requirements.txt
 | Binance **-2015 Invalid API-key** | Testnet yerine gerçek hesap anahtarı girilmiş (veya tersi). `TEST_MODE` ile anahtar türü uyumlu olmalı. |
 | Binance **-1021 Timestamp** | Sunucu saati kayık. `sudo timedatectl set-ntp true` |
 | `XYZUSDT testnet üzerinde işlem görmüyor` | Testnette sadece belli coinler var. Bot bu coinleri artık sanal işlemle (gerçek fiyatla) dener, bkz. 9.4. |
+| İzleme haberleri: "Google News HTTP 429" | Google aramaları geçici olarak sınırladı; bot o turu bırakır, 30 dk sonra tekrar dener. Sık oluyorsa `export WATCH_NEWS_MINUTES="60"` veya `WATCH_NEWS_MAX_COINS="10"`. |
 | Sanal işlem: "fiyatı da bulunamadı" | Coin Binance, Gate.io ve MEXC'nin hiçbirinde USDT çiftiyle işlem görmüyor. `check.py`'de fiyat kaynakları satırına bak. |
 | Telegram kanalları: "giriş yapılmamış" | Botu durdur, `python3 tg_login.py` çalıştır (9.2. adım 3). |
 | Telegram kanalları: "telethon kurulu değil" | `pip install --upgrade pip setuptools wheel && pip install -r requirements.txt` |

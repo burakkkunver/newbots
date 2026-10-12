@@ -57,6 +57,24 @@ def price_sources():
     return f"{ok}/3 kaynak çalışıyor (sanal işlemler ve Binance'te olmayan coinlerin ölçümü için)"
 
 
+def watch_news():
+    from watchnews import WatchNews
+    w = WatchNews()
+    coins = w.pick_coins()
+    if not coins:
+        raise RuntimeError("CoinGecko trend listesi alınamadı")
+    print(f"   Aranacak coinler (trend listesi, {len(coins)}): {', '.join(s for s, _ in coins[:12])}")
+    total = 0
+    for sym, name in coins[:3]:
+        items = w.search(sym, name)
+        total += len(items)
+        print(f"   {sym} ({name or '-'}): son {config.WATCH_NEWS_MAX_AGE_MIN:g} dk'da {len(items)} ilgili haber")
+        for it in items[:2]:
+            print(f"     • {int((time.time() - it['published']) / 60)} dk önce | {it['title'][:90]}")
+        time.sleep(1.5)
+    return f"Google News ve CoinGecko erişilebilir ({total} örnek haber)"
+
+
 def binance():
     from binance_api import Binance
     b = Binance(config.BINANCE_API_KEY, config.BINANCE_SECRET, testnet=config.TEST_MODE)
@@ -174,3 +192,4 @@ if __name__ == "__main__":
     step("Listeleme duyuruları", announcements)
     step("Telegram kanalları", telegram_channels)
     step("Piyasa Nabzı", pulse)
+    step("İzleme listesi haberleri", watch_news)
